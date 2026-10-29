@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { QueryResult, QueryResultRow } from "pg";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import { createMigrator } from "../src/index.js";
 
 function result<Row extends QueryResultRow>(rows: Row[] = []): QueryResult<Row> {

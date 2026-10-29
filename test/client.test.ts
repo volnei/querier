@@ -1,5 +1,5 @@
 import { Pool, type QueryResult, type QueryResultRow } from "pg";
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "bun:test";
 import {
   createDatabase,
   createQuerier,

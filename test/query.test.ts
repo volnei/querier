@@ -1,5 +1,4 @@
-import { describe, expect, it } from "vitest";
-import { expectTypeOf } from "vitest";
+import { describe, expect, expectTypeOf, it } from "bun:test";
 import {
   sql,
   type JsonValue,

@@ -5,10 +5,10 @@ A minimal, typed layer for executing SQL directly with the [`pg`](https://node-p
 ## Installation
 
 ```sh
-npm install querier pg
+bun add querier pg
 ```
 
-The package is ESM-only and requires Node.js 20 or newer.
+The project uses Bun 1.4 or newer for development, tests, examples, and CI. The published package is ESM-only and remains compatible with Node.js 20 or newer.
 
 ```ts
 import { Pool } from "pg";
@@ -76,7 +76,7 @@ const users = await db.many<User>()`
 `sql.type<Row>()` provides compile-time types with no runtime cost. Passing any parser with a `parse(value)` method also validates and transforms every returned row. Zod works without an adapter and remains an optional application dependency:
 
 ```sh
-npm install zod
+bun add zod
 ```
 
 ```ts
@@ -347,7 +347,7 @@ The [`example`](./example) directory contains a complete application with a SQL 
 
 ```sh
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/querier
-npm run example
+bun run example
 ```
 
 The example applies pending migrations and backfills, inserts a user inside a transaction, reads it through the repository, and verifies the result. The CI workflow runs this same example against the official minimal PostgreSQL Alpine image.
@@ -361,12 +361,12 @@ A standalone TypeScript tag cannot infer the columns returned by SQL text. Autom
 ## Development and distribution
 
 ```sh
-npm run check       # validates types
-npm test            # runs the test suite
-npm run build       # generates dist/
-npm pack --dry-run  # shows exactly what will be included in the package
+bun run check          # validates types
+bun test               # runs the test suite
+bun run build          # generates dist/
+bun pm pack --dry-run  # shows exactly what will be included in the package
 ```
 
-To test in another application before publishing, run `npm pack` and install the generated `.tgz` file in that application. The `prepack` hook always runs type checking, tests, and the build before packaging or publishing.
+To test in another application before publishing, run `bun pm pack` and install the generated `.tgz` file in that application. The `prepack` hook always runs type checking, tests, and the build before packaging or publishing.
 
-After choosing an available registry name and authenticating with `npm login`, make the first public release with `npm publish`. For scoped packages, use a name such as `@your-org/querier`; `publishConfig` is already configured for public access.
+After choosing an available registry name and authenticating with the registry, make the first public release with `bun publish --access public`. For scoped packages, use a name such as `@your-org/querier`; `publishConfig` is already configured for public access.

@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "description": "A tiny, typed PostgreSQL query executor built directly on pg.",
   "type": "module",
+  "packageManager": "bun@1.4.4",
   "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,12 +17,12 @@
     "dist"
   ],
   "scripts": {
-    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
-    "check": "tsc --noEmit",
-    "example": "npm run build && tsc --noEmit -p example/tsconfig.json && tsx example/index.ts",
-    "test": "vitest run",
-    "prepack": "npm run check && npm test && npm run build"
+    "clean": "bun -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "build": "bun run clean && bunx tsc -p tsconfig.build.json",
+    "check": "bunx tsc --noEmit",
+    "example": "bun run build && bunx tsc --noEmit -p example/tsconfig.json && bun example/index.ts",
+    "test": "bun test",
+    "prepack": "bun run check && bun test && bun run build"
   },
   "keywords": [
     "postgresql",
@@ -43,13 +44,13 @@
     "pg-query-stream": "^4.17.1"
   },
   "devDependencies": {
+    "@types/bun": "^1.4.4",
     "pg": "^8.16.3",
-    "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.5",
     "zod": "^4.6.7"
   },
   "engines": {
+    "bun": ">=1.4.0",
     "node": ">=20"
   }
 }
