@@ -77,6 +77,45 @@ describe("createQuerier", () => {
     expect(users).toEqual([{ id: 42n }]);
   });
 
+  it("returns typed tuples using pg array row mode", async () => {
+    const query = vi.fn().mockResolvedValue({
+      command: "SELECT",
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [[42, "Ada"]],
+    });
+    const db = createQuerier({ query });
+
+    const user = await db.oneTuple<[id: number, name: string]>()`
+      select id, name from users where id = ${42}
+    `;
+
+    expectTypeOf(user).toEqualTypeOf<[id: number, name: string]>();
+    expect(user).toEqual([42, "Ada"]);
+    expect(query).toHaveBeenCalledWith({
+      text: "\n      select id, name from users where id = $1\n    ",
+      values: [42],
+      rowMode: "array",
+    });
+  });
+
+  it("infers and validates tuple rows with a parser", async () => {
+    const tupleParser = {
+      parse(value: unknown): [id: bigint, name: string] {
+        const [id, name] = value as [string, string];
+        return [BigInt(id), name];
+      },
+    };
+    const query = vi.fn().mockResolvedValue({ rows: [["42", "Ada"]] });
+    const db = createQuerier({ query });
+
+    const users = await db.tuples(tupleParser)`select id, name from users`;
+
+    expectTypeOf(users).toEqualTypeOf<Array<[id: bigint, name: string]>>();
+    expect(users).toEqual([[42n, "Ada"]]);
+  });
+
   it("uses execute itself as a parameterized SQL tag", async () => {
     const query = vi.fn().mockResolvedValue(result([]));
     const db = createQuerier({ query });
@@ -180,6 +219,10 @@ describe("repository transactions", () => {
       return this.maybeOne<{ id: number; name: string }>()`
         select id, name from users where id = ${id}
       `;
+    }
+
+    count() {
+      return this.oneTuple<[count: number]>()`select count(*)::int from users`;
     }
   }
 

@@ -61,6 +61,36 @@ export abstract class Repository {
     return this.querier.maybeOne<object>();
   }
 
+  protected tuples<Row extends readonly unknown[]>(): ExecutableQueryTag<Row, Row[]>;
+  protected tuples<Parser extends RowParser<readonly unknown[]>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>[]>;
+  protected tuples(parser?: RowParser<readonly unknown[]>) {
+    if (parser) return this.querier.tuples(parser);
+    return this.querier.tuples<readonly unknown[]>();
+  }
+
+  protected oneTuple<Row extends readonly unknown[]>(): ExecutableQueryTag<Row, Row>;
+  protected oneTuple<Parser extends RowParser<readonly unknown[]>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>>;
+  protected oneTuple(parser?: RowParser<readonly unknown[]>) {
+    if (parser) return this.querier.oneTuple(parser);
+    return this.querier.oneTuple<readonly unknown[]>();
+  }
+
+  protected maybeTuple<Row extends readonly unknown[]>(): ExecutableQueryTag<
+    Row,
+    Row | null
+  >;
+  protected maybeTuple<Parser extends RowParser<readonly unknown[]>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser> | null>;
+  protected maybeTuple(parser?: RowParser<readonly unknown[]>) {
+    if (parser) return this.querier.maybeTuple(parser);
+    return this.querier.maybeTuple<readonly unknown[]>();
+  }
+
   protected stream<Query extends SqlQuery>(
     query: Query,
     options?: StreamOptions,

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { expectTypeOf } from "vitest";
-import { sql, type SqlQuery, type SqlStatement } from "../src/index.js";
+import {
+  sql,
+  type JsonValue,
+  type SqlQuery,
+  type SqlStatement,
+} from "../src/index.js";
 
 describe("sql", () => {
   it("distinguishes statements from typed row queries", () => {
@@ -49,5 +54,49 @@ describe("sql", () => {
       "insert into users (name, active) values ($1, $2), ($3, $4) returning id where id in ($5, $6, $7)",
     );
     expect(query.values).toEqual(["Ada", true, "Grace", false, 1, 2, 3]);
+  });
+
+  it("encodes JSON values distinctly from SQL null and PostgreSQL arrays", () => {
+    const payload = {
+      type: "account.created",
+      tags: ["billing", "audit"],
+      metadata: null,
+    } satisfies JsonValue;
+    const query = sql`
+      select ${sql.json(payload)}, ${sql.json(null)}, ${null}, ${sql.json([1, 2], "jsonb")}
+    `;
+
+    expect(query.text).toBe("\n      select $1, $2, $3, $4::jsonb\n    ");
+    expect(query.values).toEqual([
+      '{"type":"account.created","tags":["billing","audit"],"metadata":null}',
+      "null",
+      null,
+      "[1,2]",
+    ]);
+  });
+
+  it("rejects values that cannot be represented safely as JSON", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(() => sql.json(undefined as never)).toThrow(
+      "sql.json does not support undefined at $",
+    );
+    expect(() => sql.json(1n as never)).toThrow(
+      "sql.json does not support bigint at $",
+    );
+    expect(() => sql.json(Number.NaN)).toThrow(
+      "sql.json does not support non-finite numbers at $",
+    );
+    expect(() => sql.json(circular as never)).toThrow(
+      "sql.json does not support circular values at $.self",
+    );
+
+    if (false) {
+      // @ts-expect-error undefined is SQL NULL-like, not a JSON value.
+      sql.json({ missing: undefined });
+      // @ts-expect-error bigint needs an explicit JSON representation.
+      sql.json({ amount: 1n });
+    }
   });
 });

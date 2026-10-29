@@ -79,6 +79,21 @@ export interface Querier {
     parser: Parser,
   ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser> | null>;
 
+  tuples<Row extends readonly unknown[]>(): ExecutableQueryTag<Row, Row[]>;
+  tuples<Parser extends RowParser<readonly unknown[]>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>[]>;
+
+  oneTuple<Row extends readonly unknown[]>(): ExecutableQueryTag<Row, Row>;
+  oneTuple<Parser extends RowParser<readonly unknown[]>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>>;
+
+  maybeTuple<Row extends readonly unknown[]>(): ExecutableQueryTag<Row, Row | null>;
+  maybeTuple<Parser extends RowParser<readonly unknown[]>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser> | null>;
+
   stream<Query extends SqlQuery>(
     query: Query,
     options?: StreamOptions,
@@ -104,6 +119,14 @@ interface PgStreamClient {
     values?: readonly unknown[],
   ): Promise<QueryResult<Row>>;
   query(stream: QueryStream): QueryStream;
+}
+
+interface PgArrayQueryable {
+  query<Row extends readonly unknown[]>(config: {
+    readonly text: string;
+    readonly values: readonly unknown[];
+    readonly rowMode: "array";
+  }): Promise<{ readonly rows: Row[] }>;
 }
 
 interface StreamClientLease {
@@ -231,6 +254,82 @@ function createQuerierInternal(
     return executableTag(input, runMaybeOne);
   }
 
+  const arrayClient = client as unknown as PgArrayQueryable;
+
+  function parseTuple<Row extends readonly unknown[]>(
+    parser: RowParser<Row> | undefined,
+    row: unknown,
+    rowIndex: number,
+  ): Row {
+    if (!parser) return row as Row;
+    try {
+      return parser.parse(row);
+    } catch (cause) {
+      throw new RowValidationError(rowIndex, cause);
+    }
+  }
+
+  async function executeTuples<Row extends readonly unknown[]>(
+    query: SqlQuery<Row>,
+  ): Promise<Row[]> {
+    const result = await arrayClient.query<Row>({
+      text: query.text,
+      values: query.values,
+      rowMode: "array",
+    });
+    return result.rows.map((row, index) => parseTuple(query.parser, row, index));
+  }
+
+  const executableTupleTag = <Row extends readonly unknown[], Result>(
+    parser: RowParser<Row> | undefined,
+    run: (query: SqlQuery<Row>) => Promise<Result>,
+  ): ExecutableQueryTag<Row, Result> => {
+    const typedSql = parser ? sql.type(parser) : sql.type<Row>();
+    return (strings, ...interpolations) => run(typedSql(strings, ...interpolations));
+  };
+
+  function tuples<Row extends readonly unknown[]>(): ExecutableQueryTag<Row, Row[]>;
+  function tuples<Parser extends RowParser<readonly unknown[]>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>[]>;
+  function tuples(
+    parser?: RowParser<readonly unknown[]>,
+  ): ExecutableQueryTag<readonly unknown[], Array<readonly unknown[]>> {
+    return executableTupleTag(parser, executeTuples);
+  }
+
+  function oneTuple<Row extends readonly unknown[]>(): ExecutableQueryTag<Row, Row>;
+  function oneTuple<Parser extends RowParser<readonly unknown[]>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>>;
+  function oneTuple(
+    parser?: RowParser<readonly unknown[]>,
+  ): ExecutableQueryTag<readonly unknown[], readonly unknown[]> {
+    return executableTupleTag(parser, async (query) => {
+      const rows = await executeTuples(query);
+      if (rows.length === 0) throw new NoRowsError();
+      if (rows.length > 1) throw new TooManyRowsError(rows.length);
+      return rows[0]!;
+    });
+  }
+
+  function maybeTuple<Row extends readonly unknown[]>(): ExecutableQueryTag<
+    Row,
+    Row | null
+  >;
+  function maybeTuple<Parser extends RowParser<readonly unknown[]>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser> | null>;
+  function maybeTuple(
+    parser?: RowParser<readonly unknown[]>,
+  ): ExecutableQueryTag<readonly unknown[], readonly unknown[] | null> {
+    return executableTupleTag(parser, async (query) => {
+      const rows = await executeTuples(query);
+      if (rows.length > 1) throw new TooManyRowsError(rows.length);
+      return rows[0] ?? null;
+    });
+  }
+
   function validateStreamOptions(options: StreamOptions): void {
     if (
       options.batchSize !== undefined &&
@@ -323,7 +422,16 @@ function createQuerierInternal(
     return runExecute(query);
   }
 
-  return Object.freeze({ many, one, maybeOne, stream, execute });
+  return Object.freeze({
+    many,
+    one,
+    maybeOne,
+    tuples,
+    oneTuple,
+    maybeTuple,
+    stream,
+    execute,
+  });
 }
 
 export interface TransactionOptions {
@@ -399,6 +507,9 @@ const reservedRepositoryNames = new Set([
   "many",
   "one",
   "maybeOne",
+  "tuples",
+  "oneTuple",
+  "maybeTuple",
   "stream",
   "execute",
   "transaction",

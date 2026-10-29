@@ -1,6 +1,6 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { Pool } from "pg";
-import { createDatabase, Repository } from "querier";
+import { createDatabase, Repository, sql } from "querier";
 import { z } from "zod";
 
 const UserRow = z.object({
@@ -10,6 +10,19 @@ const UserRow = z.object({
 }).strict();
 
 type User = z.output<typeof UserRow>;
+const UserTuple = z.tuple([
+  z.string().transform(BigInt),
+  z.string().email(),
+]);
+
+const EventRow = z.object({
+  payload: z.object({
+    type: z.literal("user.created"),
+    userId: z.string(),
+    metadata: z.null(),
+    tags: z.array(z.string()),
+  }),
+}).strict();
 
 class UsersRepository extends Repository {
   create(email: string): Promise<User> {
@@ -35,6 +48,14 @@ class UsersRepository extends Repository {
       cross join generate_series(1, 2)
       where u.email = ${email}
       order by u.id
+    `;
+  }
+
+  tupleByEmail(email: string) {
+    return this.oneTuple(UserTuple)`
+      select id, email
+      from users
+      where email = ${email}
     `;
   }
 }
@@ -76,18 +97,35 @@ try {
   const users = new UsersService(db.users);
 
   const created = await db.transaction(() => users.create(email));
-  const { streamed, found } = await db.transaction(async () => {
+  const { streamed, found, tuple } = await db.transaction(async () => {
     const streamed: User[] = [];
     for await (const user of db.users.streamByEmail(email)) {
       streamed.push(user);
       break;
     }
-    return { streamed, found: await db.users.findByEmail(email) };
+    return {
+      streamed,
+      found: await db.users.findByEmail(email),
+      tuple: await db.users.tupleByEmail(email),
+    };
   });
+
+  const event = await db.one(EventRow)`
+    insert into events (payload)
+    values (${sql.json({
+      type: "user.created",
+      userId: created.id.toString(),
+      metadata: null,
+      tags: ["example", "json"],
+    })})
+    returning payload
+  `;
 
   deepStrictEqual(found, created);
   deepStrictEqual(streamed, [created]);
-  console.log({ applied, backfilled, user: found });
+  deepStrictEqual(tuple, [created.id, created.email]);
+  deepStrictEqual(event.payload.userId, created.id.toString());
+  console.log({ applied, backfilled, user: found, event });
 } finally {
   await pool.end();
 }

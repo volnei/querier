@@ -13,6 +13,16 @@ export type SqlValue =
   | readonly SqlValue[]
   | { readonly [key: string]: unknown };
 
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
+export type JsonType = "json" | "jsonb";
+
 interface SqlSource {
   readonly text: string;
   readonly values: readonly unknown[];
@@ -86,6 +96,53 @@ function makeFragment(text: string, values: readonly unknown[] = []): SqlFragmen
   return Object.freeze({ text, values: Object.freeze([...values]), [fragmentBrand]: true as const });
 }
 
+function assertJsonValue(
+  value: unknown,
+  path = "$",
+  seen = new WeakSet<object>(),
+): asserts value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new TypeError(`sql.json does not support non-finite numbers at ${path}`);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(`sql.json does not support ${typeof value} at ${path}`);
+  }
+  if (seen.has(value)) {
+    throw new TypeError(`sql.json does not support circular values at ${path}`);
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertJsonValue(item, `${path}[${index}]`, seen));
+    seen.delete(value);
+    return;
+  }
+
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (prototype !== Object.prototype && prototype !== null) {
+    const name = (value as { constructor?: { name?: string } }).constructor?.name;
+    throw new TypeError(
+      `sql.json only supports plain objects, received ${name ?? "object"} at ${path}`,
+    );
+  }
+  for (const [key, item] of Object.entries(value)) {
+    assertJsonValue(item, `${path}.${key}`, seen);
+  }
+  seen.delete(value);
+}
+
+function json(value: JsonValue, type?: JsonType): SqlFragment {
+  assertJsonValue(value);
+  const encoded = JSON.stringify(value);
+  return makeFragment(`$1${type ? `::${type}` : ""}`, [encoded]);
+}
+
 export interface SqlTag {
   (
     strings: TemplateStringsArray,
@@ -110,6 +167,7 @@ export interface SqlTag {
   identifier(...parts: readonly [string, ...string[]]): SqlFragment;
   join(items: readonly SqlInterpolation[], separator?: SqlFragment): SqlFragment;
   values(rows: readonly (readonly SqlValue[])[]): SqlFragment;
+  json(value: JsonValue, type?: JsonType): SqlFragment;
   empty: SqlFragment;
 }
 
@@ -216,6 +274,8 @@ export const sql = Object.assign(tag, {
 
     return makeFragment(tuples.join(", "), values);
   },
+
+  json,
 
   empty: makeFragment(""),
 }) as SqlTag;

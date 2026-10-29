@@ -39,6 +39,8 @@ export type {
 export { isSqlQuery, sql } from "./query.js";
 export type {
   AnySqlQuery,
+  JsonType,
+  JsonValue,
   ParserOutput,
   RowParser,
   SqlFragment,

@@ -64,9 +64,10 @@ const users = await db.many<User>()`
 - `db.many<Row>()\`...\`` returns `Row[]`.
 - `db.one<Row>()\`...\`` returns `Row` and requires exactly one row.
 - `db.maybeOne<Row>()\`...\`` returns `Row | null` and rejects more than one row.
+- `db.tuples<Tuple>()\`...\``, `db.oneTuple<Tuple>()\`...\``, and `db.maybeTuple<Tuple>()\`...\`` use PostgreSQL array row mode.
 - `db.stream<Row>()\`...\`` returns an `AsyncIterable<Row>` backed by a PostgreSQL cursor.
 - `db.execute\`...\`` returns the original `pg` `QueryResult`.
-- Every method also accepts a prebuilt `sql` query when composition or reuse is useful.
+- Object-row methods also accept a prebuilt `sql` query when composition or reuse is useful.
 - `db.transaction(callback, options?)` uses a `PoolClient` with automatic commit/rollback and async context propagation.
 - `sql.fragment`, `sql.identifier`, `sql.join`, and `sql.values` enable safe composition.
 
@@ -96,6 +97,61 @@ const account = await db.one(AccountRow)`
 ```
 
 Validation happens after cardinality checks. `many` reports the failing row through `RowValidationError.rowIndex`, preserving the parser error as `cause`. Queries without a parser behave exactly as before.
+
+## Tuples
+
+Tuple methods use the native `pg` array row mode. They avoid allocating row objects, preserve duplicate column names, and retain positional labels in TypeScript:
+
+```ts
+const account = await db.oneTuple<
+  [id: bigint, balance: string]
+>()`
+  select id, balance
+  from accounts
+  where id = ${id}
+`;
+
+const [accountId, balance] = account;
+```
+
+`tuples` returns every row and `maybeTuple` preserves the same zero-or-one cardinality guarantee as `maybeOne`. A tuple parser such as a Zod tuple infers, validates, and transforms every position:
+
+```ts
+const AccountTuple = z.tuple([
+  z.string().transform(BigInt),
+  z.string(),
+]);
+
+const accounts = await db.tuples(AccountTuple)`
+  select id, balance from accounts
+`;
+```
+
+## JSON parameters
+
+`sql.json` serializes a strict `JsonValue` explicitly. This distinguishes JSON values from PostgreSQL values without guessing:
+
+```ts
+await db.execute`
+  insert into events (payload)
+  values (${sql.json({ type: "account.created", tags: ["billing"] })})
+`;
+
+sql.json(null);       // JSON null
+null;                 // SQL NULL
+sql.json([1, 2, 3]);  // JSON array
+[1, 2, 3];            // PostgreSQL array
+```
+
+Use an explicit cast when PostgreSQL cannot infer the parameter type:
+
+```ts
+const result = await db.one<{ payload: unknown }>()`
+  select ${sql.json(value, "jsonb")} as payload
+`;
+```
+
+`JsonValue` excludes `undefined`, `bigint`, dates, class instances, functions, and symbols. Runtime checks also reject circular structures and non-finite numbers instead of silently changing their meaning. JSON and JSONB results are decoded by `pg` and can be validated deeply with the same Zod row parsers.
 
 ## Streaming large results
 
