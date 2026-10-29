@@ -1,16 +1,20 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { Pool } from "pg";
 import { createDatabase, Repository, sql } from "querier";
+import { z } from "zod";
 
-type User = {
-  id: string;
-  email: string;
-  created_at: Date;
-};
+const UserRow = z.object({
+  id: z.string().transform(BigInt),
+  email: z.string().email(),
+  created_at: z.date(),
+}).strict();
+
+type User = z.output<typeof UserRow>;
+const userSql = sql.type(UserRow);
 
 class UsersRepository extends Repository {
   create(email: string): Promise<User> {
-    return this.one(sql<User>`
+    return this.one(userSql`
       insert into users (email)
       values (${email})
       returning id, email, created_at
@@ -18,7 +22,7 @@ class UsersRepository extends Repository {
   }
 
   findByEmail(email: string): Promise<User | null> {
-    return this.maybeOne(sql<User>`
+    return this.maybeOne(userSql`
       select id, email, created_at
       from users
       where email = ${email}

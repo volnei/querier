@@ -18,12 +18,20 @@ interface SqlSource {
   readonly values: readonly unknown[];
 }
 
+export interface RowParser<Output extends object> {
+  parse(value: unknown): Output;
+}
+
+export type ParserOutput<Parser extends RowParser<object>> =
+  Parser extends RowParser<infer Output> ? Output : never;
+
 export interface SqlStatement extends SqlSource {
   readonly [queryBrand]: { readonly typed: false };
 }
 
 export interface SqlQuery<Row extends object = object> extends SqlSource {
   readonly [queryBrand]: { readonly typed: true; readonly row: Row };
+  readonly parser?: RowParser<Row>;
 }
 
 export type AnySqlQuery = SqlStatement | SqlQuery;
@@ -90,6 +98,9 @@ export interface SqlTag {
   ): SqlQuery<Row>;
 
   type<Row extends object>(): TypedSqlTag<Row>;
+  type<Parser extends RowParser<object>>(
+    parser: Parser,
+  ): TypedSqlTag<ParserOutput<Parser>>;
 
   fragment(
     strings: TemplateStringsArray,
@@ -113,10 +124,30 @@ const tag = (
   }) as unknown as SqlStatement;
 };
 
+function createTypedTag<Row extends object>(parser?: RowParser<Row>): TypedSqlTag<Row> {
+  return (
+    strings: TemplateStringsArray,
+    ...interpolations: readonly SqlInterpolation[]
+  ): SqlQuery<Row> => {
+    const compiled = compile(strings, interpolations);
+    return Object.freeze({
+      ...compiled,
+      ...(parser ? { parser } : {}),
+      [queryBrand]: undefined,
+    }) as unknown as SqlQuery<Row>;
+  };
+}
+
+function typedSql<Row extends object>(): TypedSqlTag<Row>;
+function typedSql<Parser extends RowParser<object>>(
+  parser: Parser,
+): TypedSqlTag<ParserOutput<Parser>>;
+function typedSql(parser?: RowParser<object>): TypedSqlTag<object> {
+  return createTypedTag(parser);
+}
+
 export const sql = Object.assign(tag, {
-  type<Row extends object>(): TypedSqlTag<Row> {
-    return tag as unknown as TypedSqlTag<Row>;
-  },
+  type: typedSql,
 
   fragment(
     strings: TemplateStringsArray,

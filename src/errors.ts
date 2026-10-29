@@ -21,3 +21,14 @@ export class TransactionClosedError extends Error {
     super("Cannot execute a query after its transaction callback has completed");
   }
 }
+
+export class RowValidationError extends Error {
+  override readonly name = "RowValidationError";
+
+  constructor(
+    readonly rowIndex: number,
+    override readonly cause: unknown,
+  ) {
+    super(`Query result row ${rowIndex} did not match its schema`, { cause });
+  }
+}

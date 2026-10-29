@@ -5,6 +5,7 @@ import {
   createQuerier,
   NoRowsError,
   Repository,
+  RowValidationError,
   sql,
   TooManyRowsError,
   TransactionClosedError,
@@ -65,6 +66,43 @@ describe("createQuerier", () => {
     await expect(twoRows.maybeOne(sql<{ id: number }>`select id from users`)).rejects.toBeInstanceOf(
       TooManyRowsError,
     );
+  });
+
+  it("infers, validates, and transforms rows with an optional parser", async () => {
+    const userRow = {
+      parse(value: unknown): { id: bigint; name: string } {
+        const row = value as { id: string; name: string };
+        return { id: BigInt(row.id), name: row.name };
+      },
+    };
+    const query = vi.fn().mockResolvedValue(result([{ id: "42", name: "Ada" }]));
+    const db = createQuerier({ query });
+    const userSql = sql.type(userRow);
+
+    const user = await db.one(userSql`select id, name from users`);
+
+    expectTypeOf(user).toEqualTypeOf<{ id: bigint; name: string }>();
+    expect(user).toEqual({ id: 42n, name: "Ada" });
+  });
+
+  it("reports the index and cause of an invalid result row", async () => {
+    const invalidRow = new Error("invalid row");
+    const userRow = {
+      parse(value: unknown): { id: number } {
+        const row = value as { id: number };
+        if (row.id === 2) throw invalidRow;
+        return row;
+      },
+    };
+    const db = createQuerier({
+      query: vi.fn().mockResolvedValue(result([{ id: 1 }, { id: 2 }])),
+    });
+
+    await expect(db.many(sql.type(userRow)`select id from users`)).rejects.toMatchObject({
+      name: "RowValidationError",
+      rowIndex: 1,
+      cause: invalidRow,
+    } satisfies Partial<RowValidationError>);
   });
 });
 

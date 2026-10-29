@@ -20,7 +20,12 @@ export type {
   RepositoryTransaction,
   TransactionOptions,
 } from "./client.js";
-export { NoRowsError, TooManyRowsError, TransactionClosedError } from "./errors.js";
+export {
+  NoRowsError,
+  RowValidationError,
+  TooManyRowsError,
+  TransactionClosedError,
+} from "./errors.js";
 export { createMigrator } from "./migrations.js";
 export type {
   MigrateUpOptions,
@@ -31,6 +36,8 @@ export type {
 export { isSqlQuery, sql } from "./query.js";
 export type {
   AnySqlQuery,
+  ParserOutput,
+  RowParser,
   SqlFragment,
   SqlInterpolation,
   SqlQuery,

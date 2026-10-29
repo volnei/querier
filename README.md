@@ -66,6 +66,35 @@ const users = await db.many(sql<User>`
 - `db.transaction(callback, options?)` uses a `PoolClient` with automatic commit/rollback and async context propagation.
 - `sql.fragment`, `sql.identifier`, `sql.join`, and `sql.values` enable safe composition.
 
+## Optional runtime row validation
+
+`sql.type<Row>()` provides compile-time types with no runtime cost. Passing any parser with a `parse(value)` method also validates and transforms every returned row. Zod works without an adapter and remains an optional application dependency:
+
+```sh
+npm install zod
+```
+
+```ts
+import { z } from "zod";
+
+const AccountRow = z.object({
+  id: z.string().transform(BigInt),
+  balance: z.string(),
+}).strict();
+
+const accountSql = sql.type(AccountRow);
+
+const account = await db.one(accountSql`
+  select id, balance
+  from accounts
+  where id = ${id}
+`);
+
+// Inferred as { id: bigint; balance: string }
+```
+
+Validation happens after cardinality checks. `many` reports the failing row through `RowValidationError.rowIndex`, preserving the parser error as `cause`. Queries without a parser behave exactly as before.
+
 ## Repositories and transactions
 
 Repositories extend the abstract `Repository` class. The library injects either the pool or transaction executor:

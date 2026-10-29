@@ -5,7 +5,12 @@ import {
   type BackfillManager,
   type BackfillOptions,
 } from "./backfills.js";
-import { NoRowsError, TooManyRowsError, TransactionClosedError } from "./errors.js";
+import {
+  NoRowsError,
+  RowValidationError,
+  TooManyRowsError,
+  TransactionClosedError,
+} from "./errors.js";
 import { createMigrator, type Migrator, type MigratorOptions } from "./migrations.js";
 import type { SqlQuery, SqlStatement } from "./query.js";
 import {
@@ -37,31 +42,53 @@ export interface Querier {
 }
 
 export function createQuerier(client: PgQueryable): Querier {
-  const execute = <Query extends SqlStatement | SqlQuery>(query: Query) =>
-    client.query<ExecutedRow<Query>>(query.text, query.values);
   const executeRows = <Query extends SqlQuery>(query: Query) =>
     client.query<PgRow<Query>>(query.text, query.values);
+
+  function parseRow<Query extends SqlQuery>(
+    query: Query,
+    row: PgRow<Query>,
+    rowIndex: number,
+  ): RowOf<Query> {
+    if (!query.parser) return row as RowOf<Query>;
+    try {
+      return query.parser.parse(row) as RowOf<Query>;
+    } catch (cause) {
+      throw new RowValidationError(rowIndex, cause);
+    }
+  }
 
   return Object.freeze({
     async many<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>[]> {
       const result = await executeRows(query);
-      return result.rows;
+      return result.rows.map((row, index) => parseRow(query, row, index));
     },
 
     async one<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>> {
       const result = await executeRows(query);
       if (result.rows.length === 0) throw new NoRowsError();
       if (result.rows.length > 1) throw new TooManyRowsError(result.rows.length);
-      return result.rows[0] as RowOf<Query>;
+      return parseRow(query, result.rows[0]!, 0);
     },
 
     async maybeOne<Query extends SqlQuery>(query: Query): Promise<RowOf<Query> | null> {
       const result = await executeRows(query);
       if (result.rows.length > 1) throw new TooManyRowsError(result.rows.length);
-      return (result.rows[0] as RowOf<Query> | undefined) ?? null;
+      return result.rows[0] ? parseRow(query, result.rows[0], 0) : null;
     },
 
-    execute,
+    async execute<Query extends SqlStatement | SqlQuery>(
+      query: Query,
+    ): Promise<QueryResult<ExecutedRow<Query>>> {
+      const result = await client.query<ExecutedRow<Query>>(query.text, query.values);
+      if (!("parser" in query) || !query.parser) return result;
+      return {
+        ...result,
+        rows: result.rows.map((row, index) =>
+          parseRow(query, row as PgRow<Query & SqlQuery>, index),
+        ) as ExecutedRow<Query>[],
+      };
+    },
   });
 }
 
