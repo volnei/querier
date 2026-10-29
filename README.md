@@ -1,14 +1,14 @@
 # querier
 
-Uma camada mínima e tipada para executar SQL diretamente com o driver [`pg`](https://node-postgres.com/). Não é ORM, não mantém estado de entidades e não cria uma linguagem paralela ao SQL.
+A minimal, typed layer for executing SQL directly with the [`pg`](https://node-postgres.com/) driver. It is not an ORM, does not track entity state, and does not introduce a separate query language.
 
-## Instalação
+## Installation
 
 ```sh
 npm install querier pg
 ```
 
-O pacote é ESM e requer Node.js 20 ou mais recente.
+The package is ESM-only and requires Node.js 20 or newer.
 
 ```ts
 import { Pool } from "pg";
@@ -30,7 +30,7 @@ const user = await db.maybeOne(sql<User>`
 // User | null
 ```
 
-Queries que retornam linhas exigem um tipo de resultado. SQL sem tipo é aceito por `execute`, mas é rejeitado por `one`, `maybeOne` e `many`:
+Queries that return rows require a result type. Untyped SQL is accepted by `execute`, but rejected by `one`, `maybeOne`, and `many`:
 
 ```ts
 const userSql = sql.type<User>();
@@ -44,7 +44,7 @@ const user = await db.maybeOne(userSql`
 await db.execute(sql`delete from sessions where expires_at < now()`);
 ```
 
-Toda interpolação normal vira parâmetro do PostgreSQL. Para trechos estruturais, use apenas os helpers explícitos:
+Every regular interpolation becomes a PostgreSQL parameter. For structural SQL, use only the explicit helpers:
 
 ```ts
 const columns = [sql.identifier("id"), sql.identifier("email")];
@@ -59,16 +59,16 @@ const users = await db.many(sql<User>`
 
 ## API
 
-- `db.many(query)` retorna `Row[]`.
-- `db.one(query)` retorna `Row` e exige exatamente uma linha.
-- `db.maybeOne(query)` retorna `Row | null` e rejeita mais de uma linha.
-- `db.execute(query)` retorna o `QueryResult` original do `pg`.
-- `db.transaction(callback, options?)` usa um `PoolClient`, com commit/rollback automático.
-- `sql.fragment`, `sql.identifier`, `sql.join` e `sql.values` permitem composição segura.
+- `db.many(query)` returns `Row[]`.
+- `db.one(query)` returns `Row` and requires exactly one row.
+- `db.maybeOne(query)` returns `Row | null` and rejects more than one row.
+- `db.execute(query)` returns the original `pg` `QueryResult`.
+- `db.transaction(callback, options?)` uses a `PoolClient` with automatic commit/rollback.
+- `sql.fragment`, `sql.identifier`, `sql.join`, and `sql.values` enable safe composition.
 
-## Repositories e transações
+## Repositories and transactions
 
-Repositories estendem a classe abstrata `Repository`. A biblioteca injeta o executor do pool ou da transação:
+Repositories extend the abstract `Repository` class. The library injects either the pool or transaction executor:
 
 ```ts
 class AccountsRepository extends Repository {
@@ -91,22 +91,22 @@ const db = createDatabase(pool, {
   },
 });
 
-// Fora de uma transação, o repository usa o pool.
+// Outside a transaction, the repository uses the pool.
 const account = await db.accounts.changeBalance(accountId, 10);
 
-// Dentro da transação, todos os repositories usam o mesmo PoolClient.
+// Inside a transaction, every repository uses the same PoolClient.
 await db.transaction(async (tx) => {
   await tx.accounts.changeBalance(sourceId, -100);
   await tx.accounts.changeBalance(destinationId, 100);
 });
 ```
 
-Repositories são instanciados de forma lazy no primeiro acesso e reutilizados depois. Cada transação possui seu próprio cache lazy; todos os repositories acessados dentro dela compartilham exatamente o mesmo `PoolClient`.
-Eles são expostos diretamente no database (`db.accounts`) e na transação (`tx.accounts`); não existe um namespace `db.repositories`.
+Repositories are instantiated lazily on first access and reused afterward. Each transaction has its own lazy cache, and every repository accessed within it shares the exact same `PoolClient`.
+They are exposed directly on the database (`db.accounts`) and transaction (`tx.accounts`); there is no `db.repositories` namespace.
 
-## Schema e tipos gerados
+## Schema and inferred types
 
-O schema declarativo é opcional e não participa da execução das queries. Ele serve para inferir tipos, criar snapshots e gerar SQL de migrations para revisão:
+The declarative schema is optional and is not involved in query execution. It is used to infer types, create snapshots, and generate migration SQL for review:
 
 ```ts
 import {
@@ -144,7 +144,7 @@ type NewUser = Database["users"]["insert"];
 type UserPatch = Database["users"]["update"];
 ```
 
-O gerador compara o snapshot anterior com o estado desejado:
+The generator compares the previous snapshot with the desired state:
 
 ```ts
 const plan = generateMigration(previousSnapshot, schema);
@@ -154,11 +154,11 @@ console.log(plan.destructiveChanges);
 const nextSnapshot = plan.snapshot;
 ```
 
-O plano suporta tabelas, colunas, defaults, nullability e índices. Mudanças ambíguas de primary key, identity ou `unique` de coluna são recusadas e devem ser escritas manualmente. O SQL gerado nunca é aplicado automaticamente.
+The plan supports tables, columns, defaults, nullability, and indexes. Ambiguous changes to primary keys, identity columns, or column-level `unique` constraints are rejected and must be written manually. Generated SQL is never applied automatically.
 
 ## Migrations
 
-Migrations são arquivos SQL comuns. Não existe modelo de schema, callback ou DSL de tabelas:
+Migrations are regular SQL files. There is no schema model, callback, or table DSL:
 
 ```text
 migrations/
@@ -176,28 +176,28 @@ create table users (
 
 ```ts
 await db.migrations.status(); // { applied, pending }
-await db.migrations.up();     // aplica todas as pendentes
+await db.migrations.up();     // applies every pending migration
 ```
 
-Os arquivos são ordenados lexicograficamente pelo nome e executados por inteiro. Não existem conceitos de `up`, `down`, comentários especiais ou uma linguagem própria dentro do SQL. Para corrigir ou reverter uma mudança, crie uma nova migration SQL.
+Files are sorted lexicographically by name and executed in full. There are no `up` or `down` concepts, special comments, or custom language inside the SQL. To fix or revert a change, create a new SQL migration.
 
-Cada arquivo roda em sua própria transação. Um advisory lock do PostgreSQL impede execuções concorrentes, e `public._querier_migrations` registra o identificador e o SHA-256 de cada arquivo aplicado. Se um arquivo aplicado for editado, a execução é recusada. `up({ to: "..." })` aplica até um identificador específico.
+Each file runs in its own transaction. A PostgreSQL advisory lock prevents concurrent runs, and `public._querier_migrations` records the identifier and SHA-256 checksum of every applied file. If an applied file is edited, execution is rejected. `up({ to: "..." })` applies migrations through a specific identifier.
 
-## O que “typed” significa aqui
+## What “typed” means here
 
-O tipo de retorno é declarado junto do SQL (`sql<User>`) e segue a query até o método de cardinalidade. O SQL e seus valores continuam sendo entregues diretamente ao `pg`.
+The result type is declared alongside the SQL (`sql<User>`) and follows the query into the cardinality method. The SQL and its values are still passed directly to `pg`.
 
-Uma tag TypeScript isolada não consegue inferir as colunas retornadas por texto SQL. Inferência automática de resultado exige uma etapa adicional que leia o schema PostgreSQL e analise/valide a query. Isso pode ser adicionado depois como geração estática sem aumentar o runtime desta biblioteca.
+A standalone TypeScript tag cannot infer the columns returned by SQL text. Automatic result inference requires an additional step that reads the PostgreSQL schema and parses or validates the query. This can be added later as static generation without increasing the library's runtime footprint.
 
-## Desenvolvimento e distribuição
+## Development and distribution
 
 ```sh
-npm run check       # valida os tipos
-npm test            # executa os testes
-npm run build       # gera dist/
-npm pack --dry-run  # mostra exatamente o que entrará no pacote
+npm run check       # validates types
+npm test            # runs the test suite
+npm run build       # generates dist/
+npm pack --dry-run  # shows exactly what will be included in the package
 ```
 
-Para testar em outra aplicação antes de publicar, execute `npm pack` e instale o arquivo `.tgz` gerado nessa aplicação. O hook `prepack` sempre executa typecheck, testes e build antes de empacotar ou publicar.
+To test in another application before publishing, run `npm pack` and install the generated `.tgz` file in that application. The `prepack` hook always runs type checking, tests, and the build before packaging or publishing.
 
-Depois de escolher um nome disponível no registro e autenticar com `npm login`, a primeira publicação pública é feita com `npm publish`. Para pacotes com escopo, use um nome como `@sua-org/querier`; o `publishConfig` já está configurado para acesso público.
+After choosing an available registry name and authenticating with `npm login`, make the first public release with `npm publish`. For scoped packages, use a name such as `@your-org/querier`; `publishConfig` is already configured for public access.
