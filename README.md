@@ -184,6 +184,39 @@ class AccountsRepository extends Repository {
 
 The stream owns one checked-out client until iteration finishes. Breaking, returning, or throwing from `for await` closes the server cursor and releases that client. Inside `db.transaction`, it uses the active transaction client; consume the iterable before the transaction callback completes and do not run concurrent queries on that same transaction while its cursor is open.
 
+## Query checker
+
+The package includes a Bun CLI that finds Querier tagged templates through the TypeScript AST and asks PostgreSQL to parse and analyze them:
+
+```sh
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/app \
+  bunx querier check src
+```
+
+For applications that use a dedicated PostgreSQL schema:
+
+```sh
+bunx querier check src --search-path app
+```
+
+PostgreSQL is the source of truth. The checker uses `PREPARE`, so `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, and `VALUES` statements are analyzed without executing mutations. Typed `SELECT` and `VALUES` queries are additionally described with a zero-row query and compared with their declared object keys or tuple length:
+
+```text
+src/users.repository.ts:18:7 error column "emial" does not exist
+src/users.repository.ts:27:5 error PostgreSQL does not return typed column(s): email
+Checked 12 queries (2 errors, 0 warnings, 0 skipped)
+```
+
+Static `sql.identifier`, `sql.fragment`, `sql.join`, `sql.values`, and `sql.json` expressions are compiled like their runtime equivalents. Their result can also be assigned to a local `const` before interpolation. Arbitrary dynamic structural SQL cannot be safely inferred and is reported by PostgreSQL instead of being guessed.
+
+Use `--json` for editor or agent integrations. When PostgreSQL is unavailable, `--schema` enables a deliberately limited offline check against a module exporting `schema` or a default declarative schema:
+
+```sh
+bunx querier check src --schema ./src/schema.ts
+```
+
+Offline mode checks simple table and selected-column references. It does not attempt to reproduce PostgreSQL functions, casts, views, extensions, or its complete SQL grammar. Result-shape comparison for data-changing statements is intentionally omitted because describing them through ordinary SQL would execute their side effects; their SQL and parameter inference are still checked by `PREPARE`.
+
 ## Repositories and transactions
 
 Repositories extend the abstract `Repository` class. The library injects either the pool or transaction executor:
