@@ -183,6 +183,17 @@ Files are sorted lexicographically by name and executed in full. There are no `u
 
 Each file runs in its own transaction. A PostgreSQL advisory lock prevents concurrent runs, and `public._querier_migrations` records the identifier and SHA-256 checksum of every applied file. If an applied file is edited, execution is rejected. `up({ to: "..." })` applies migrations through a specific identifier.
 
+## Example
+
+The [`example`](./example) directory contains a complete application with a SQL migration, a lazy repository, a transaction, and typed queries. Start PostgreSQL, then run:
+
+```sh
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/querier
+npm run example
+```
+
+The example applies pending migrations, inserts a user inside a transaction, reads it through the repository, and verifies the result. The CI workflow runs this same example against the official minimal PostgreSQL Alpine image.
+
 ## What “typed” means here
 
 The result type is declared alongside the SQL (`sql<User>`) and follows the query into the cardinality method. The SQL and its values are still passed directly to `pg`.
