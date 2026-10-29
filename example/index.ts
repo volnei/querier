@@ -1,6 +1,6 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { Pool } from "pg";
-import { createDatabase, Repository, sql } from "querier";
+import { createDatabase, Repository } from "querier";
 import { z } from "zod";
 
 const UserRow = z.object({
@@ -10,23 +10,22 @@ const UserRow = z.object({
 }).strict();
 
 type User = z.output<typeof UserRow>;
-const userSql = sql.type(UserRow);
 
 class UsersRepository extends Repository {
   create(email: string): Promise<User> {
-    return this.one(userSql`
+    return this.one(UserRow)`
       insert into users (email)
       values (${email})
       returning id, email, created_at
-    `);
+    `;
   }
 
   findByEmail(email: string): Promise<User | null> {
-    return this.maybeOne(userSql`
+    return this.maybeOne(UserRow)`
       select id, email, created_at
       from users
       where email = ${email}
-    `);
+    `;
   }
 }
 

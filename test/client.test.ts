@@ -45,6 +45,48 @@ describe("createQuerier", () => {
     expect(user).toEqual({ id: 1, name: "Ada" });
   });
 
+  it("executes typed SQL directly from cardinality methods", async () => {
+    const query = vi.fn().mockResolvedValue(result([{ id: 1, name: "Ada" }]));
+    const db = createQuerier({ query });
+
+    const user = await db.one<{ id: number; name: string }>()`
+      select id, name from users where id = ${1}
+    `;
+
+    expectTypeOf(user).toEqualTypeOf<{ id: number; name: string }>();
+    expect(user).toEqual({ id: 1, name: "Ada" });
+    expect(query).toHaveBeenCalledWith(
+      "\n      select id, name from users where id = $1\n    ",
+      [1],
+    );
+  });
+
+  it("accepts a parser directly in a cardinality method", async () => {
+    const userRow = {
+      parse(value: unknown): { id: bigint } {
+        return { id: BigInt((value as { id: string }).id) };
+      },
+    };
+    const db = createQuerier({
+      query: vi.fn().mockResolvedValue(result([{ id: "42" }])),
+    });
+
+    const users = await db.many(userRow)`select id from users`;
+
+    expectTypeOf(users).toEqualTypeOf<{ id: bigint }[]>();
+    expect(users).toEqual([{ id: 42n }]);
+  });
+
+  it("uses execute itself as a parameterized SQL tag", async () => {
+    const query = vi.fn().mockResolvedValue(result([]));
+    const db = createQuerier({ query });
+
+    const executed = await db.execute`delete from users where id = ${7}`;
+
+    expect(executed.rowCount).toBe(0);
+    expect(query).toHaveBeenCalledWith("delete from users where id = $1", [7]);
+  });
+
   it("requires a result type for row-returning methods", () => {
     if (false) {
       const db = createQuerier({ query: vi.fn() });
@@ -109,9 +151,9 @@ describe("createQuerier", () => {
 describe("repository transactions", () => {
   class UsersRepository extends Repository {
     find(id: number) {
-      return this.maybeOne(sql<{ id: number; name: string }>`
+      return this.maybeOne<{ id: number; name: string }>()`
         select id, name from users where id = ${id}
-      `);
+      `;
     }
   }
 

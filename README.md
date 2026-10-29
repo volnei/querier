@@ -12,7 +12,7 @@ The package is ESM-only and requires Node.js 20 or newer.
 
 ```ts
 import { Pool } from "pg";
-import { createDatabase, Repository, sql } from "querier";
+import { createDatabase, sql } from "querier";
 
 const db = createDatabase(new Pool({ connectionString: process.env.DATABASE_URL }));
 
@@ -22,26 +22,28 @@ type User = {
 };
 
 const email = "ada@example.com";
-const user = await db.maybeOne(sql<User>`
+const user = await db.maybeOne<User>()`
   select id, email
   from users
   where email = ${email}
-`);
+`;
 // User | null
 ```
 
 Queries that return rows require a result type. Untyped SQL is accepted by `execute`, but rejected by `one`, `maybeOne`, and `many`:
 
 ```ts
-const userSql = sql.type<User>();
-
-const user = await db.maybeOne(userSql`
+const user = await db.maybeOne<User>()`
   select id, email
   from users
   where id = ${id}
-`);
+`;
 
-await db.execute(sql`delete from sessions where expires_at < now()`);
+await db.execute`delete from sessions where expires_at < now()`;
+
+// Prebuilt queries remain useful for composition and reuse.
+const activeUsers = sql<User>`select id, email from users where active`;
+const users = await db.many(activeUsers);
 ```
 
 Every regular interpolation becomes a PostgreSQL parameter. For structural SQL, use only the explicit helpers:
@@ -50,19 +52,20 @@ Every regular interpolation becomes a PostgreSQL parameter. For structural SQL, 
 const columns = [sql.identifier("id"), sql.identifier("email")];
 const ids = [1, 2, 3];
 
-const users = await db.many(sql<User>`
+const users = await db.many<User>()`
   select ${sql.join(columns)}
   from ${sql.identifier("users")}
   where id in (${sql.join(ids)})
-`);
+`;
 ```
 
 ## API
 
-- `db.many(query)` returns `Row[]`.
-- `db.one(query)` returns `Row` and requires exactly one row.
-- `db.maybeOne(query)` returns `Row | null` and rejects more than one row.
-- `db.execute(query)` returns the original `pg` `QueryResult`.
+- `db.many<Row>()\`...\`` returns `Row[]`.
+- `db.one<Row>()\`...\`` returns `Row` and requires exactly one row.
+- `db.maybeOne<Row>()\`...\`` returns `Row | null` and rejects more than one row.
+- `db.execute\`...\`` returns the original `pg` `QueryResult`.
+- Every method also accepts a prebuilt `sql` query when composition or reuse is useful.
 - `db.transaction(callback, options?)` uses a `PoolClient` with automatic commit/rollback and async context propagation.
 - `sql.fragment`, `sql.identifier`, `sql.join`, and `sql.values` enable safe composition.
 
@@ -82,13 +85,11 @@ const AccountRow = z.object({
   balance: z.string(),
 }).strict();
 
-const accountSql = sql.type(AccountRow);
-
-const account = await db.one(accountSql`
+const account = await db.one(AccountRow)`
   select id, balance
   from accounts
   where id = ${id}
-`);
+`;
 
 // Inferred as { id: bigint; balance: string }
 ```
@@ -102,12 +103,12 @@ Repositories extend the abstract `Repository` class. The library injects either 
 ```ts
 class AccountsRepository extends Repository {
   changeBalance(id: number, amount: number) {
-    return this.one(sql<Account>`
+    return this.one<Account>()`
       update accounts
       set balance = balance + ${amount}
       where id = ${id}
       returning id, balance
-    `);
+    `;
   }
 }
 

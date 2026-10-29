@@ -1,4 +1,18 @@
-import type { Querier } from "./client.js";
+import type { QueryResult, QueryResultRow } from "pg";
+import type { ExecutableQueryTag, Querier } from "./client.js";
+import {
+  isSqlQuery,
+  type ParserOutput,
+  type RowParser,
+  type SqlInterpolation,
+  type SqlQuery,
+  type SqlStatement,
+} from "./query.js";
+
+type RowOf<Query> = Query extends SqlQuery<infer Row> ? Row : never;
+type ExecutedRow<Query extends SqlStatement | SqlQuery> = Query extends SqlQuery<infer Row>
+  ? Row & QueryResultRow
+  : QueryResultRow;
 
 /**
  * Base class for application repositories.
@@ -9,20 +23,52 @@ import type { Querier } from "./client.js";
 export abstract class Repository {
   constructor(private readonly querier: Querier) {}
 
-  protected many<Query extends Parameters<Querier["many"]>[0]>(query: Query) {
-    return this.querier.many(query);
+  protected many<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>[]>;
+  protected many<Row extends object>(): ExecutableQueryTag<Row, Row[]>;
+  protected many<Parser extends RowParser<object>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>[]>;
+  protected many(input?: SqlQuery | RowParser<object>) {
+    if (isSqlQuery(input)) return this.querier.many(input as SqlQuery);
+    if (input) return this.querier.many(input);
+    return this.querier.many<object>();
   }
 
-  protected one<Query extends Parameters<Querier["one"]>[0]>(query: Query) {
-    return this.querier.one(query);
+  protected one<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>>;
+  protected one<Row extends object>(): ExecutableQueryTag<Row, Row>;
+  protected one<Parser extends RowParser<object>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>>;
+  protected one(input?: SqlQuery | RowParser<object>) {
+    if (isSqlQuery(input)) return this.querier.one(input as SqlQuery);
+    if (input) return this.querier.one(input);
+    return this.querier.one<object>();
   }
 
-  protected maybeOne<Query extends Parameters<Querier["maybeOne"]>[0]>(query: Query) {
-    return this.querier.maybeOne(query);
+  protected maybeOne<Query extends SqlQuery>(query: Query): Promise<RowOf<Query> | null>;
+  protected maybeOne<Row extends object>(): ExecutableQueryTag<Row, Row | null>;
+  protected maybeOne<Parser extends RowParser<object>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser> | null>;
+  protected maybeOne(input?: SqlQuery | RowParser<object>) {
+    if (isSqlQuery(input)) return this.querier.maybeOne(input as SqlQuery);
+    if (input) return this.querier.maybeOne(input);
+    return this.querier.maybeOne<object>();
   }
 
-  protected execute<Query extends Parameters<Querier["execute"]>[0]>(query: Query) {
-    return this.querier.execute(query);
+  protected execute<Query extends SqlStatement | SqlQuery>(
+    query: Query,
+  ): Promise<QueryResult<ExecutedRow<Query>>>;
+  protected execute(
+    strings: TemplateStringsArray,
+    ...interpolations: readonly SqlInterpolation[]
+  ): Promise<QueryResult<QueryResultRow>>;
+  protected execute(
+    input: SqlStatement | SqlQuery | TemplateStringsArray,
+    ...interpolations: readonly SqlInterpolation[]
+  ) {
+    if (isSqlQuery(input)) return this.querier.execute(input);
+    return this.querier.execute(input, ...interpolations);
   }
 }
 

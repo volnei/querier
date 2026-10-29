@@ -12,6 +12,7 @@ export type {
   DatabaseConfig,
   DatabaseWithBackfills,
   DatabaseWithMigrations,
+  ExecutableQueryTag,
   PgPoolLike,
   PgQueryable,
   PgTransactionClient,

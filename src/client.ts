@@ -12,7 +12,15 @@ import {
   TransactionClosedError,
 } from "./errors.js";
 import { createMigrator, type Migrator, type MigratorOptions } from "./migrations.js";
-import type { SqlQuery, SqlStatement } from "./query.js";
+import {
+  isSqlQuery,
+  sql,
+  type ParserOutput,
+  type RowParser,
+  type SqlInterpolation,
+  type SqlQuery,
+  type SqlStatement,
+} from "./query.js";
 import {
   createLazyRepositories,
   type RepositoryInstances,
@@ -32,13 +40,39 @@ type ExecutedRow<Query extends SqlStatement | SqlQuery> = Query extends SqlQuery
   ? PgRow<Query>
   : QueryResultRow;
 
+export interface ExecutableQueryTag<Row extends object, Result> {
+  (
+    strings: TemplateStringsArray,
+    ...interpolations: readonly SqlInterpolation[]
+  ): Promise<Result>;
+}
+
 export interface Querier {
   many<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>[]>;
+  many<Row extends object>(): ExecutableQueryTag<Row, Row[]>;
+  many<Parser extends RowParser<object>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>[]>;
+
   one<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>>;
+  one<Row extends object>(): ExecutableQueryTag<Row, Row>;
+  one<Parser extends RowParser<object>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>>;
+
   maybeOne<Query extends SqlQuery>(query: Query): Promise<RowOf<Query> | null>;
+  maybeOne<Row extends object>(): ExecutableQueryTag<Row, Row | null>;
+  maybeOne<Parser extends RowParser<object>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser> | null>;
+
   execute<Query extends SqlStatement | SqlQuery>(
     query: Query,
   ): Promise<QueryResult<ExecutedRow<Query>>>;
+  execute(
+    strings: TemplateStringsArray,
+    ...interpolations: readonly SqlInterpolation[]
+  ): Promise<QueryResult<QueryResultRow>>;
 }
 
 export function createQuerier(client: PgQueryable): Querier {
@@ -58,38 +92,99 @@ export function createQuerier(client: PgQueryable): Querier {
     }
   }
 
-  return Object.freeze({
-    async many<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>[]> {
-      const result = await executeRows(query);
-      return result.rows.map((row, index) => parseRow(query, row, index));
-    },
+  async function runMany<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>[]> {
+    const result = await executeRows(query);
+    return result.rows.map((row, index) => parseRow(query, row, index));
+  }
 
-    async one<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>> {
-      const result = await executeRows(query);
-      if (result.rows.length === 0) throw new NoRowsError();
-      if (result.rows.length > 1) throw new TooManyRowsError(result.rows.length);
-      return parseRow(query, result.rows[0]!, 0);
-    },
+  async function runOne<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>> {
+    const result = await executeRows(query);
+    if (result.rows.length === 0) throw new NoRowsError();
+    if (result.rows.length > 1) throw new TooManyRowsError(result.rows.length);
+    return parseRow(query, result.rows[0]!, 0);
+  }
 
-    async maybeOne<Query extends SqlQuery>(query: Query): Promise<RowOf<Query> | null> {
-      const result = await executeRows(query);
-      if (result.rows.length > 1) throw new TooManyRowsError(result.rows.length);
-      return result.rows[0] ? parseRow(query, result.rows[0], 0) : null;
-    },
+  async function runMaybeOne<Query extends SqlQuery>(
+    query: Query,
+  ): Promise<RowOf<Query> | null> {
+    const result = await executeRows(query);
+    if (result.rows.length > 1) throw new TooManyRowsError(result.rows.length);
+    return result.rows[0] ? parseRow(query, result.rows[0], 0) : null;
+  }
 
-    async execute<Query extends SqlStatement | SqlQuery>(
-      query: Query,
-    ): Promise<QueryResult<ExecutedRow<Query>>> {
-      const result = await client.query<ExecutedRow<Query>>(query.text, query.values);
-      if (!("parser" in query) || !query.parser) return result;
-      return {
-        ...result,
-        rows: result.rows.map((row, index) =>
-          parseRow(query, row as PgRow<Query & SqlQuery>, index),
-        ) as ExecutedRow<Query>[],
-      };
-    },
-  });
+  const executableTag = <Row extends object, Result>(
+    parser: RowParser<Row> | undefined,
+    run: (query: SqlQuery<Row>) => Promise<Result>,
+  ): ExecutableQueryTag<Row, Result> => {
+    const typedSql = parser ? sql.type(parser) : sql.type<Row>();
+    return (strings, ...interpolations) => run(typedSql(strings, ...interpolations));
+  };
+
+  function many<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>[]>;
+  function many<Row extends object>(): ExecutableQueryTag<Row, Row[]>;
+  function many<Parser extends RowParser<object>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>[]>;
+  function many(
+    input?: SqlQuery | RowParser<object>,
+  ): Promise<object[]> | ExecutableQueryTag<object, object[]> {
+    if (isSqlQuery(input)) return runMany(input as SqlQuery);
+    return executableTag(input, runMany);
+  }
+
+  function one<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>>;
+  function one<Row extends object>(): ExecutableQueryTag<Row, Row>;
+  function one<Parser extends RowParser<object>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser>>;
+  function one(
+    input?: SqlQuery | RowParser<object>,
+  ): Promise<object> | ExecutableQueryTag<object, object> {
+    if (isSqlQuery(input)) return runOne(input as SqlQuery);
+    return executableTag(input, runOne);
+  }
+
+  function maybeOne<Query extends SqlQuery>(query: Query): Promise<RowOf<Query> | null>;
+  function maybeOne<Row extends object>(): ExecutableQueryTag<Row, Row | null>;
+  function maybeOne<Parser extends RowParser<object>>(
+    parser: Parser,
+  ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser> | null>;
+  function maybeOne(
+    input?: SqlQuery | RowParser<object>,
+  ): Promise<object | null> | ExecutableQueryTag<object, object | null> {
+    if (isSqlQuery(input)) return runMaybeOne(input as SqlQuery);
+    return executableTag(input, runMaybeOne);
+  }
+
+  async function runExecute<Query extends SqlStatement | SqlQuery>(
+    query: Query,
+  ): Promise<QueryResult<ExecutedRow<Query>>> {
+    const result = await client.query<ExecutedRow<Query>>(query.text, query.values);
+    if (!("parser" in query) || !query.parser) return result;
+    return {
+      ...result,
+      rows: result.rows.map((row, index) =>
+        parseRow(query, row as PgRow<Query & SqlQuery>, index),
+      ) as ExecutedRow<Query>[],
+    };
+  }
+
+  function execute<Query extends SqlStatement | SqlQuery>(
+    query: Query,
+  ): Promise<QueryResult<ExecutedRow<Query>>>;
+  function execute(
+    strings: TemplateStringsArray,
+    ...interpolations: readonly SqlInterpolation[]
+  ): Promise<QueryResult<QueryResultRow>>;
+  function execute(
+    input: SqlStatement | SqlQuery | TemplateStringsArray,
+    ...interpolations: readonly SqlInterpolation[]
+  ): Promise<QueryResult<QueryResultRow>> {
+    const query = isSqlQuery(input) ? input : sql(input, ...interpolations);
+    return runExecute(query);
+  }
+
+  return Object.freeze({ many, one, maybeOne, execute });
 }
 
 export interface TransactionOptions {
