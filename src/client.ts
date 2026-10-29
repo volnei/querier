@@ -42,7 +42,7 @@ type ExecutedRow<Query extends SqlStatement | SqlQuery> = Query extends SqlQuery
   ? PgRow<Query>
   : QueryResultRow;
 
-export interface ExecutableQueryTag<Row extends object, Result> {
+export interface ExecutableQueryTag<_Row extends object, Result> {
   (
     strings: TemplateStringsArray,
     ...interpolations: readonly SqlInterpolation[]

@@ -23,16 +23,17 @@ function result<Row extends QueryResultRow>(rows: Row[]): QueryResult<Row> {
 
 describe("createQuerier", () => {
   it("accepts a real pg Pool without adapters", () => {
-    if (false) {
+    const typecheck = () => {
       createQuerier(new Pool());
       const db = createDatabase(new Pool(), {
         repositories: {},
         migrations: { directory: "./migrations" },
         backfills: { directory: "./backfills" },
       });
-      db.migrations.status();
-      db.backfills.status();
-    }
+      void db.migrations.status();
+      void db.backfills.status();
+    };
+    expect(typecheck).toBeInstanceOf(Function);
   });
 
   it("preserves the declared row type", async () => {
@@ -127,7 +128,7 @@ describe("createQuerier", () => {
   });
 
   it("infers streamed rows from a type or parser", () => {
-    if (false) {
+    const typecheck = () => {
       const db = createQuerier(new Pool());
       const accountRow = {
         parse(value: unknown): { id: bigint } {
@@ -142,7 +143,8 @@ describe("createQuerier", () => {
 
       expectTypeOf(parsed).toEqualTypeOf<AsyncIterable<{ id: bigint }>>();
       expectTypeOf(typed).toEqualTypeOf<AsyncIterable<{ id: number }>>();
-    }
+    };
+    expect(typecheck).toBeInstanceOf(Function);
   });
 
   it("rejects an invalid stream batch size before executing", () => {
@@ -153,12 +155,13 @@ describe("createQuerier", () => {
   });
 
   it("requires a result type for row-returning methods", () => {
-    if (false) {
+    const typecheck = () => {
       const db = createQuerier({ query: vi.fn() });
       // @ts-expect-error Untyped SQL statements are only accepted by execute().
-      db.one(sql`select id from users`);
-      db.execute(sql`delete from users`);
-    }
+      void db.one(sql`select id from users`);
+      void db.execute(sql`delete from users`);
+    };
+    expect(typecheck).toBeInstanceOf(Function);
   });
 
   it("enforces one-row cardinality", async () => {

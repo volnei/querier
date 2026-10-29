@@ -56,7 +56,7 @@ describe("schema types", () => {
   });
 
   it("rejects index columns that do not exist", () => {
-    if (false) {
+    const typecheck = () => {
       defineSchema({
         users: {
           columns: { id: { type: "uuid" } },
@@ -68,7 +68,8 @@ describe("schema types", () => {
           },
         },
       } as const);
-    }
+    };
+    expect(typecheck).toBeInstanceOf(Function);
   });
 });
 

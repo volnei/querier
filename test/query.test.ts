@@ -91,11 +91,12 @@ describe("sql", () => {
       "sql.json does not support circular values at $.self",
     );
 
-    if (false) {
+    const typecheck = () => {
       // @ts-expect-error undefined is SQL NULL-like, not a JSON value.
       sql.json({ missing: undefined });
       // @ts-expect-error bigint needs an explicit JSON representation.
       sql.json({ amount: 1n });
-    }
+    };
+    expect(typecheck).toBeInstanceOf(Function);
   });
 });

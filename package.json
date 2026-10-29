@@ -20,11 +20,13 @@
     "clean": "bun -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
     "build": "bun run clean && bunx tsc -p tsconfig.build.json",
     "check": "bunx tsc --noEmit",
+    "lint": "bun lint --max-warnings 0",
+    "lint:fix": "bun lint --fix",
     "example": "bun run build && bunx tsc --noEmit -p example/tsconfig.json && bun example/index.ts",
     "test": "bun test",
     "test:unit": "bun test test/*.test.ts",
     "test:integration": "bun test test/integration",
-    "prepack": "bun run check && bun test && bun run build"
+    "prepack": "bun run lint && bun run check && bun test && bun run build"
   },
   "keywords": [
     "postgresql",
