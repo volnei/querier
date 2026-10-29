@@ -64,6 +64,7 @@ const users = await db.many<User>()`
 - `db.many<Row>()\`...\`` returns `Row[]`.
 - `db.one<Row>()\`...\`` returns `Row` and requires exactly one row.
 - `db.maybeOne<Row>()\`...\`` returns `Row | null` and rejects more than one row.
+- `db.stream<Row>()\`...\`` returns an `AsyncIterable<Row>` backed by a PostgreSQL cursor.
 - `db.execute\`...\`` returns the original `pg` `QueryResult`.
 - Every method also accepts a prebuilt `sql` query when composition or reuse is useful.
 - `db.transaction(callback, options?)` uses a `PoolClient` with automatic commit/rollback and async context propagation.
@@ -95,6 +96,37 @@ const account = await db.one(AccountRow)`
 ```
 
 Validation happens after cardinality checks. `many` reports the failing row through `RowValidationError.rowIndex`, preserving the parser error as `cause`. Queries without a parser behave exactly as before.
+
+## Streaming large results
+
+`stream` reads rows in bounded batches and validates each row as it is yielded. It uses the same typed tag style as the cardinality methods:
+
+```ts
+for await (const account of db.stream(AccountRow, { batchSize: 500 })`
+  select id, balance
+  from accounts
+  where active
+  order by id
+`) {
+  await processAccount(account);
+}
+```
+
+Repositories expose the same primitive:
+
+```ts
+class AccountsRepository extends Repository {
+  active() {
+    return this.stream(AccountRow, { batchSize: 500 })`
+      select id, balance
+      from accounts
+      where active
+    `;
+  }
+}
+```
+
+The stream owns one checked-out client until iteration finishes. Breaking, returning, or throwing from `for await` closes the server cursor and releases that client. Inside `db.transaction`, it uses the active transaction client; consume the iterable before the transaction callback completes and do not run concurrent queries on that same transaction while its cursor is open.
 
 ## Repositories and transactions
 

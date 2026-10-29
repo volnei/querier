@@ -13,12 +13,14 @@ export type {
   DatabaseWithBackfills,
   DatabaseWithMigrations,
   ExecutableQueryTag,
+  ExecutableStreamTag,
   PgPoolLike,
   PgQueryable,
   PgTransactionClient,
   Querier,
   RepositoryDatabase,
   RepositoryTransaction,
+  StreamOptions,
   TransactionOptions,
 } from "./client.js";
 export {

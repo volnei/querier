@@ -27,6 +27,16 @@ class UsersRepository extends Repository {
       where email = ${email}
     `;
   }
+
+  streamByEmail(email: string): AsyncIterable<User> {
+    return this.stream(UserRow, { batchSize: 1 })`
+      select u.id, u.email, u.created_at
+      from users as u
+      cross join generate_series(1, 2)
+      where u.email = ${email}
+      order by u.id
+    `;
+  }
 }
 
 class UsersService {
@@ -40,6 +50,7 @@ class UsersService {
 const pool = new Pool({
   connectionString:
     process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/querier",
+  max: 1,
 });
 
 const db = createDatabase(pool, {
@@ -65,9 +76,17 @@ try {
   const users = new UsersService(db.users);
 
   const created = await db.transaction(() => users.create(email));
-  const found = await db.users.findByEmail(email);
+  const { streamed, found } = await db.transaction(async () => {
+    const streamed: User[] = [];
+    for await (const user of db.users.streamByEmail(email)) {
+      streamed.push(user);
+      break;
+    }
+    return { streamed, found: await db.users.findByEmail(email) };
+  });
 
   deepStrictEqual(found, created);
+  deepStrictEqual(streamed, [created]);
   console.log({ applied, backfilled, user: found });
 } finally {
   await pool.end();

@@ -87,6 +87,32 @@ describe("createQuerier", () => {
     expect(query).toHaveBeenCalledWith("delete from users where id = $1", [7]);
   });
 
+  it("infers streamed rows from a type or parser", () => {
+    if (false) {
+      const db = createQuerier(new Pool());
+      const accountRow = {
+        parse(value: unknown): { id: bigint } {
+          return { id: BigInt((value as { id: string }).id) };
+        },
+      };
+
+      const parsed = db.stream(accountRow, { batchSize: 100 })`
+        select id from accounts
+      `;
+      const typed = db.stream<{ id: number }>()`select id from accounts`;
+
+      expectTypeOf(parsed).toEqualTypeOf<AsyncIterable<{ id: bigint }>>();
+      expectTypeOf(typed).toEqualTypeOf<AsyncIterable<{ id: number }>>();
+    }
+  });
+
+  it("rejects an invalid stream batch size before executing", () => {
+    const db = createQuerier({ query: vi.fn() });
+    expect(() => db.stream<{ id: number }>({ batchSize: 0 })).toThrow(
+      "stream batchSize must be a positive integer",
+    );
+  });
+
   it("requires a result type for row-returning methods", () => {
     if (false) {
       const db = createQuerier({ query: vi.fn() });

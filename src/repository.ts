@@ -1,5 +1,10 @@
 import type { QueryResult, QueryResultRow } from "pg";
-import type { ExecutableQueryTag, Querier } from "./client.js";
+import type {
+  ExecutableQueryTag,
+  ExecutableStreamTag,
+  Querier,
+  StreamOptions,
+} from "./client.js";
 import {
   isSqlQuery,
   type ParserOutput,
@@ -54,6 +59,33 @@ export abstract class Repository {
     if (isSqlQuery(input)) return this.querier.maybeOne(input as SqlQuery);
     if (input) return this.querier.maybeOne(input);
     return this.querier.maybeOne<object>();
+  }
+
+  protected stream<Query extends SqlQuery>(
+    query: Query,
+    options?: StreamOptions,
+  ): AsyncIterable<RowOf<Query>>;
+  protected stream<Row extends object>(
+    options?: StreamOptions,
+  ): ExecutableStreamTag<Row>;
+  protected stream<Parser extends RowParser<object>>(
+    parser: Parser,
+    options?: StreamOptions,
+  ): ExecutableStreamTag<ParserOutput<Parser>>;
+  protected stream(
+    input?: SqlQuery | RowParser<object> | StreamOptions,
+    options: StreamOptions = {},
+  ) {
+    if (isSqlQuery(input)) return this.querier.stream(input as SqlQuery, options);
+    if (
+      typeof input === "object" &&
+      input !== null &&
+      "parse" in input &&
+      typeof input.parse === "function"
+    ) {
+      return this.querier.stream(input as RowParser<object>, options);
+    }
+    return this.querier.stream<object>(input as StreamOptions | undefined);
   }
 
   protected execute<Query extends SqlStatement | SqlQuery>(

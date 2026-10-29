@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { finished } from "node:stream/promises";
 import type { QueryResult, QueryResultRow } from "pg";
+import QueryStream from "pg-query-stream";
 import {
   createBackfillManager,
   type BackfillManager,
@@ -47,6 +49,17 @@ export interface ExecutableQueryTag<Row extends object, Result> {
   ): Promise<Result>;
 }
 
+export interface ExecutableStreamTag<Row extends object> {
+  (
+    strings: TemplateStringsArray,
+    ...interpolations: readonly SqlInterpolation[]
+  ): AsyncIterable<Row>;
+}
+
+export interface StreamOptions {
+  readonly batchSize?: number;
+}
+
 export interface Querier {
   many<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>[]>;
   many<Row extends object>(): ExecutableQueryTag<Row, Row[]>;
@@ -66,6 +79,16 @@ export interface Querier {
     parser: Parser,
   ): ExecutableQueryTag<ParserOutput<Parser>, ParserOutput<Parser> | null>;
 
+  stream<Query extends SqlQuery>(
+    query: Query,
+    options?: StreamOptions,
+  ): AsyncIterable<RowOf<Query>>;
+  stream<Row extends object>(options?: StreamOptions): ExecutableStreamTag<Row>;
+  stream<Parser extends RowParser<object>>(
+    parser: Parser,
+    options?: StreamOptions,
+  ): ExecutableStreamTag<ParserOutput<Parser>>;
+
   execute<Query extends SqlStatement | SqlQuery>(
     query: Query,
   ): Promise<QueryResult<ExecutedRow<Query>>>;
@@ -75,7 +98,59 @@ export interface Querier {
   ): Promise<QueryResult<QueryResultRow>>;
 }
 
+interface PgStreamClient {
+  query<Row extends QueryResultRow = QueryResultRow>(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<QueryResult<Row>>;
+  query(stream: QueryStream): QueryStream;
+}
+
+interface StreamClientLease {
+  readonly client: PgStreamClient;
+  release(): void;
+}
+
+type AcquireStreamClient = () => Promise<StreamClientLease>;
+
+function isPoolLike(client: PgQueryable): client is PgPoolLike {
+  return "connect" in client && typeof client.connect === "function";
+}
+
+function isRowParser(value: unknown): value is RowParser<object> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "parse" in value &&
+    typeof value.parse === "function"
+  );
+}
+
+function defaultStreamClient(client: PgQueryable): AcquireStreamClient {
+  return async () => {
+    if (isPoolLike(client)) {
+      const poolClient = await client.connect();
+      return {
+        client: poolClient as unknown as PgStreamClient,
+        release: () => poolClient.release(),
+      };
+    }
+
+    return {
+      client: client as PgStreamClient,
+      release() {},
+    };
+  };
+}
+
 export function createQuerier(client: PgQueryable): Querier {
+  return createQuerierInternal(client, defaultStreamClient(client));
+}
+
+function createQuerierInternal(
+  client: PgQueryable,
+  acquireStreamClient: AcquireStreamClient,
+): Querier {
   const executeRows = <Query extends SqlQuery>(query: Query) =>
     client.query<PgRow<Query>>(query.text, query.values);
 
@@ -156,6 +231,70 @@ export function createQuerier(client: PgQueryable): Querier {
     return executableTag(input, runMaybeOne);
   }
 
+  function validateStreamOptions(options: StreamOptions): void {
+    if (
+      options.batchSize !== undefined &&
+      (!Number.isInteger(options.batchSize) || options.batchSize < 1)
+    ) {
+      throw new TypeError("stream batchSize must be a positive integer");
+    }
+  }
+
+  async function* runStream<Query extends SqlQuery>(
+    query: Query,
+    options: StreamOptions,
+  ): AsyncIterable<RowOf<Query>> {
+    validateStreamOptions(options);
+    const lease = await acquireStreamClient();
+    const queryStream = new QueryStream(query.text, [...query.values], {
+      ...(options.batchSize === undefined ? {} : { batchSize: options.batchSize }),
+    });
+    let rowIndex = 0;
+
+    try {
+      const rows = lease.client.query(queryStream) as AsyncIterable<PgRow<Query>>;
+      for await (const row of rows) {
+        yield parseRow(query, row, rowIndex);
+        rowIndex += 1;
+      }
+    } finally {
+      const closed = finished(queryStream, { cleanup: true });
+      if (!queryStream.destroyed) queryStream.destroy();
+      await closed.catch(() => undefined);
+      lease.release();
+    }
+  }
+
+  const executableStreamTag = <Row extends object>(
+    parser: RowParser<Row> | undefined,
+    options: StreamOptions,
+  ): ExecutableStreamTag<Row> => {
+    validateStreamOptions(options);
+    const typedSql = parser ? sql.type(parser) : sql.type<Row>();
+    return (strings, ...interpolations) =>
+      runStream(typedSql(strings, ...interpolations), options);
+  };
+
+  function stream<Query extends SqlQuery>(
+    query: Query,
+    options?: StreamOptions,
+  ): AsyncIterable<RowOf<Query>>;
+  function stream<Row extends object>(options?: StreamOptions): ExecutableStreamTag<Row>;
+  function stream<Parser extends RowParser<object>>(
+    parser: Parser,
+    options?: StreamOptions,
+  ): ExecutableStreamTag<ParserOutput<Parser>>;
+  function stream(
+    input?: SqlQuery | RowParser<object> | StreamOptions,
+    options: StreamOptions = {},
+  ): AsyncIterable<object> | ExecutableStreamTag<object> {
+    if (isSqlQuery(input)) return runStream(input as SqlQuery, options);
+    if (isRowParser(input)) {
+      return executableStreamTag(input, options);
+    }
+    return executableStreamTag(undefined, (input as StreamOptions | undefined) ?? {});
+  }
+
   async function runExecute<Query extends SqlStatement | SqlQuery>(
     query: Query,
   ): Promise<QueryResult<ExecutedRow<Query>>> {
@@ -184,7 +323,7 @@ export function createQuerier(client: PgQueryable): Querier {
     return runExecute(query);
   }
 
-  return Object.freeze({ many, one, maybeOne, execute });
+  return Object.freeze({ many, one, maybeOne, stream, execute });
 }
 
 export interface TransactionOptions {
@@ -260,6 +399,7 @@ const reservedRepositoryNames = new Set([
   "many",
   "one",
   "maybeOne",
+  "stream",
   "execute",
   "transaction",
   "migrations",
@@ -312,7 +452,22 @@ export function createDatabase<Registry extends RepositoryRegistry>(
       return (context?.client ?? pool).query<Row>(text, values);
     },
   };
-  const querier = createQuerier(contextualClient);
+  const querier = createQuerierInternal(contextualClient, async () => {
+    const context = transactionStorage.getStore();
+    if (context && !context.active) throw new TransactionClosedError();
+    if (context) {
+      return {
+        client: context.client as unknown as PgStreamClient,
+        release() {},
+      };
+    }
+
+    const client = await pool.connect();
+    return {
+      client: client as unknown as PgStreamClient,
+      release: () => client.release(),
+    };
+  });
   const registry = config?.repositories;
   assertRepositoryNames(registry);
   const repositories = registry ? createLazyRepositories(registry, querier) : undefined;
