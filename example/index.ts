@@ -26,6 +26,14 @@ class UsersRepository extends Repository {
   }
 }
 
+class UsersService {
+  constructor(private readonly users: UsersRepository) {}
+
+  create(email: string): Promise<User> {
+    return this.users.create(email);
+  }
+}
+
 const pool = new Pool({
   connectionString:
     process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/querier",
@@ -45,8 +53,9 @@ const db = createDatabase(pool, {
 try {
   const applied = await db.migrations.up();
   const email = `ada-${Date.now()}@example.com`;
+  const users = new UsersService(db.users);
 
-  const created = await db.transaction(async (tx) => tx.users.create(email));
+  const created = await db.transaction(() => users.create(email));
   const found = await db.users.findByEmail(email);
 
   deepStrictEqual(found, created);

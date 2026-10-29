@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { QueryResult, QueryResultRow } from "pg";
-import { NoRowsError, TooManyRowsError } from "./errors.js";
+import { NoRowsError, TooManyRowsError, TransactionClosedError } from "./errors.js";
 import { createMigrator, type Migrator, type MigratorOptions } from "./migrations.js";
 import type { SqlQuery, SqlStatement } from "./query.js";
 import {
@@ -138,6 +139,15 @@ function attachRepositories<Target extends object, Repositories extends object>(
   return target as Target & Repositories;
 }
 
+interface TransactionContext {
+  readonly client: PgTransactionClient;
+  active: boolean;
+}
+
+function hasTransactionOptions(options: TransactionOptions): boolean {
+  return Object.keys(options).length > 0;
+}
+
 export function createDatabase(pool: PgPoolLike): Database;
 export function createDatabase<Registry extends RepositoryRegistry>(
   pool: PgPoolLike,
@@ -159,9 +169,26 @@ export function createDatabase<Registry extends RepositoryRegistry>(
   | RepositoryDatabase<RepositoryInstances<Registry>>
   | (Database & DatabaseWithMigrations)
   | (RepositoryDatabase<RepositoryInstances<Registry>> & DatabaseWithMigrations) {
-  const querier = createQuerier(pool);
+  const transactionStorage = new AsyncLocalStorage<TransactionContext>();
+  const contextualClient: PgQueryable = {
+    query<Row extends QueryResultRow = QueryResultRow>(
+      text: string,
+      values?: readonly unknown[],
+    ): Promise<QueryResult<Row>> {
+      const context = transactionStorage.getStore();
+      if (context && !context.active) throw new TransactionClosedError();
+      return (context?.client ?? pool).query<Row>(text, values);
+    },
+  };
+  const querier = createQuerier(contextualClient);
   const registry = config?.repositories;
   assertRepositoryNames(registry);
+  const repositories = registry ? createLazyRepositories(registry, querier) : undefined;
+  const transactionView = Object.freeze(
+    repositories
+      ? attachRepositories({ ...querier }, repositories)
+      : querier,
+  );
 
   const database = {
     ...querier,
@@ -173,25 +200,29 @@ export function createDatabase<Registry extends RepositoryRegistry>(
       ) => Promise<T>,
       options: TransactionOptions = {},
     ): Promise<T> {
+      const existingContext = transactionStorage.getStore();
+      if (existingContext) {
+        if (!existingContext.active) throw new TransactionClosedError();
+        if (hasTransactionOptions(options)) {
+          throw new TypeError("Nested transactions cannot change transaction options");
+        }
+        return callback(transactionView);
+      }
+
       const client = await pool.connect();
+      const context: TransactionContext = { client, active: true };
       try {
         await client.query(beginStatement(options));
-        const transactionQuerier = createQuerier(client);
-        const transaction = registry
-          ? Object.freeze(
-              attachRepositories(
-                { ...transactionQuerier },
-                createLazyRepositories(registry, transactionQuerier),
-              ),
-            )
-          : transactionQuerier;
-        const value = await callback(transaction);
+        const value = await transactionStorage.run(context, () => callback(transactionView));
+        context.active = false;
         await client.query("COMMIT");
         return value;
       } catch (error) {
+        context.active = false;
         await client.query("ROLLBACK");
         throw error;
       } finally {
+        context.active = false;
         client.release();
       }
     },
@@ -205,8 +236,6 @@ export function createDatabase<Registry extends RepositoryRegistry>(
   };
 
   return Object.freeze(
-    registry
-      ? attachRepositories(result, createLazyRepositories(registry, querier))
-      : result,
+    repositories ? attachRepositories(result, repositories) : result,
   );
 }

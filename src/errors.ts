@@ -13,3 +13,11 @@ export class TooManyRowsError extends Error {
     super(`Expected at most one row, but the query returned ${rowCount}`);
   }
 }
+
+export class TransactionClosedError extends Error {
+  override readonly name = "TransactionClosedError";
+
+  constructor() {
+    super("Cannot execute a query after its transaction callback has completed");
+  }
+}

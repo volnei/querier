@@ -11,7 +11,7 @@ export type {
   RepositoryTransaction,
   TransactionOptions,
 } from "./client.js";
-export { NoRowsError, TooManyRowsError } from "./errors.js";
+export { NoRowsError, TooManyRowsError, TransactionClosedError } from "./errors.js";
 export { createMigrator } from "./migrations.js";
 export type {
   MigrateUpOptions,

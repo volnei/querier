@@ -63,7 +63,7 @@ const users = await db.many(sql<User>`
 - `db.one(query)` returns `Row` and requires exactly one row.
 - `db.maybeOne(query)` returns `Row | null` and rejects more than one row.
 - `db.execute(query)` returns the original `pg` `QueryResult`.
-- `db.transaction(callback, options?)` uses a `PoolClient` with automatic commit/rollback.
+- `db.transaction(callback, options?)` uses a `PoolClient` with automatic commit/rollback and async context propagation.
 - `sql.fragment`, `sql.identifier`, `sql.join`, and `sql.values` enable safe composition.
 
 ## Repositories and transactions
@@ -94,15 +94,26 @@ const db = createDatabase(pool, {
 // Outside a transaction, the repository uses the pool.
 const account = await db.accounts.changeBalance(accountId, 10);
 
-// Inside a transaction, every repository uses the same PoolClient.
-await db.transaction(async (tx) => {
-  await tx.accounts.changeBalance(sourceId, -100);
-  await tx.accounts.changeBalance(destinationId, 100);
-});
+class TransferService {
+  constructor(private readonly accounts: AccountsRepository) {}
+
+  async transfer(sourceId: number, destinationId: number, amount: number) {
+    await this.accounts.changeBalance(sourceId, -amount);
+    await this.accounts.changeBalance(destinationId, amount);
+  }
+}
+
+const transfers = new TransferService(db.accounts);
+
+// AsyncLocalStorage routes every service query to the same PoolClient.
+await db.transaction(() =>
+  transfers.transfer(sourceId, destinationId, 100),
+);
 ```
 
-Repositories are instantiated lazily on first access and reused afterward. Each transaction has its own lazy cache, and every repository accessed within it shares the exact same `PoolClient`.
-They are exposed directly on the database (`db.accounts`) and transaction (`tx.accounts`); there is no `db.repositories` namespace.
+Repositories are instantiated lazily on first access and reused afterward. They resolve their executor when each query runs: the current transaction client when one exists, or the pool otherwise. This lets services keep a repository reference without accepting or forwarding a `tx` parameter.
+
+The callback still receives `tx` for explicit usage and backward compatibility. `tx.accounts` and `db.accounts` refer to the same lazy repository. Nested `db.transaction()` calls join the current transaction; nested calls cannot change its options. Async work that attempts a query after the transaction callback completes is rejected with `TransactionClosedError` instead of using a released client. Repositories are exposed directly on the database; there is no `db.repositories` namespace.
 
 ## Schema and inferred types
 
