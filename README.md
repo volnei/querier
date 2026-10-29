@@ -363,6 +363,7 @@ A standalone TypeScript tag cannot infer the columns returned by SQL text. Autom
 ```sh
 bun run check          # validates types
 bun test               # runs the test suite
+bun run test:integration # runs PostgreSQL integration tests (requires DATABASE_URL)
 bun run build          # generates dist/
 bun pm pack --dry-run  # shows exactly what will be included in the package
 ```

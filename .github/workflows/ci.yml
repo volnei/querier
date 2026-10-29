@@ -45,7 +45,10 @@ jobs:
         run: bun run check
 
       - name: Run unit tests
-        run: bun test
+        run: bun run test:unit
+
+      - name: Run PostgreSQL integration tests
+        run: bun run test:integration
 
       - name: Run example against PostgreSQL
         run: bun run example
