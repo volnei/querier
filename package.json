@@ -1,0 +1,51 @@
+{
+  "name": "querier",
+  "version": "0.0.1",
+  "description": "A tiny, typed PostgreSQL query executor built directly on pg.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "npm run check && npm test && npm run build"
+  },
+  "keywords": [
+    "postgresql",
+    "postgres",
+    "pg",
+    "sql",
+    "typescript"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "pg": "^8.0.0"
+  },
+  "dependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.5"
+  },
+  "devDependencies": {
+    "pg": "^8.16.3",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

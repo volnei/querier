@@ -1,0 +1,212 @@
+import type { QueryResult, QueryResultRow } from "pg";
+import { NoRowsError, TooManyRowsError } from "./errors.js";
+import { createMigrator, type Migrator, type MigratorOptions } from "./migrations.js";
+import type { SqlQuery, SqlStatement } from "./query.js";
+import {
+  createLazyRepositories,
+  type RepositoryInstances,
+  type RepositoryRegistry,
+} from "./repository.js";
+
+export interface PgQueryable {
+  query<Row extends QueryResultRow = QueryResultRow>(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<QueryResult<Row>>;
+}
+
+type RowOf<Query> = Query extends SqlQuery<infer Row> ? Row : never;
+type PgRow<Query extends SqlQuery> = RowOf<Query> & QueryResultRow;
+type ExecutedRow<Query extends SqlStatement | SqlQuery> = Query extends SqlQuery
+  ? PgRow<Query>
+  : QueryResultRow;
+
+export interface Querier {
+  many<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>[]>;
+  one<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>>;
+  maybeOne<Query extends SqlQuery>(query: Query): Promise<RowOf<Query> | null>;
+  execute<Query extends SqlStatement | SqlQuery>(
+    query: Query,
+  ): Promise<QueryResult<ExecutedRow<Query>>>;
+}
+
+export function createQuerier(client: PgQueryable): Querier {
+  const execute = <Query extends SqlStatement | SqlQuery>(query: Query) =>
+    client.query<ExecutedRow<Query>>(query.text, query.values);
+  const executeRows = <Query extends SqlQuery>(query: Query) =>
+    client.query<PgRow<Query>>(query.text, query.values);
+
+  return Object.freeze({
+    async many<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>[]> {
+      const result = await executeRows(query);
+      return result.rows;
+    },
+
+    async one<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>> {
+      const result = await executeRows(query);
+      if (result.rows.length === 0) throw new NoRowsError();
+      if (result.rows.length > 1) throw new TooManyRowsError(result.rows.length);
+      return result.rows[0] as RowOf<Query>;
+    },
+
+    async maybeOne<Query extends SqlQuery>(query: Query): Promise<RowOf<Query> | null> {
+      const result = await executeRows(query);
+      if (result.rows.length > 1) throw new TooManyRowsError(result.rows.length);
+      return (result.rows[0] as RowOf<Query> | undefined) ?? null;
+    },
+
+    execute,
+  });
+}
+
+export interface TransactionOptions {
+  readonly isolationLevel?:
+    | "read uncommitted"
+    | "read committed"
+    | "repeatable read"
+    | "serializable";
+  readonly readOnly?: boolean;
+  readonly deferrable?: boolean;
+}
+
+export interface PgPoolLike extends PgQueryable {
+  connect(): Promise<PgTransactionClient>;
+}
+
+export interface PgTransactionClient extends PgQueryable {
+  release(): void;
+}
+
+export type RepositoryTransaction<Repositories> = Querier & Repositories;
+
+export interface Database extends Querier {
+  transaction<T>(
+    callback: (transaction: Querier) => Promise<T>,
+    options?: TransactionOptions,
+  ): Promise<T>;
+}
+
+export type RepositoryDatabase<Repositories> = Querier & Repositories & {
+  transaction<T>(
+    callback: (transaction: RepositoryTransaction<Repositories>) => Promise<T>,
+    options?: TransactionOptions,
+  ): Promise<T>;
+};
+
+export interface DatabaseWithMigrations {
+  readonly migrations: Migrator;
+}
+
+export interface DatabaseConfig<Registry extends RepositoryRegistry = RepositoryRegistry> {
+  readonly repositories?: Registry;
+  readonly migrations?: MigratorOptions;
+}
+
+function beginStatement(options: TransactionOptions): string {
+  const clauses = ["BEGIN"];
+  if (options.isolationLevel) {
+    clauses.push(`ISOLATION LEVEL ${options.isolationLevel.toUpperCase()}`);
+  }
+  if (options.readOnly !== undefined) clauses.push(options.readOnly ? "READ ONLY" : "READ WRITE");
+  if (options.deferrable !== undefined) clauses.push(options.deferrable ? "DEFERRABLE" : "NOT DEFERRABLE");
+  return clauses.join(" ");
+}
+
+const reservedRepositoryNames = new Set([
+  "many",
+  "one",
+  "maybeOne",
+  "execute",
+  "transaction",
+  "migrations",
+]);
+
+function assertRepositoryNames(registry: RepositoryRegistry | undefined): void {
+  if (!registry) return;
+  for (const name of Object.keys(registry)) {
+    if (reservedRepositoryNames.has(name)) {
+      throw new TypeError(`Repository name is reserved: ${name}`);
+    }
+  }
+}
+
+function attachRepositories<Target extends object, Repositories extends object>(
+  target: Target,
+  repositories: Repositories,
+): Target & Repositories {
+  Object.defineProperties(target, Object.getOwnPropertyDescriptors(repositories));
+  return target as Target & Repositories;
+}
+
+export function createDatabase(pool: PgPoolLike): Database;
+export function createDatabase<Registry extends RepositoryRegistry>(
+  pool: PgPoolLike,
+  config: { readonly repositories: Registry; readonly migrations: MigratorOptions },
+): RepositoryDatabase<RepositoryInstances<Registry>> & DatabaseWithMigrations;
+export function createDatabase<Registry extends RepositoryRegistry>(
+  pool: PgPoolLike,
+  config: { readonly repositories: Registry },
+): RepositoryDatabase<RepositoryInstances<Registry>>;
+export function createDatabase(
+  pool: PgPoolLike,
+  config: { readonly migrations: MigratorOptions },
+): Database & DatabaseWithMigrations;
+export function createDatabase<Registry extends RepositoryRegistry>(
+  pool: PgPoolLike,
+  config?: DatabaseConfig<Registry>,
+):
+  | Database
+  | RepositoryDatabase<RepositoryInstances<Registry>>
+  | (Database & DatabaseWithMigrations)
+  | (RepositoryDatabase<RepositoryInstances<Registry>> & DatabaseWithMigrations) {
+  const querier = createQuerier(pool);
+  const registry = config?.repositories;
+  assertRepositoryNames(registry);
+
+  const database = {
+    ...querier,
+    async transaction<T>(
+      callback: (
+        transaction:
+          | Querier
+          | RepositoryTransaction<RepositoryInstances<Registry>>
+      ) => Promise<T>,
+      options: TransactionOptions = {},
+    ): Promise<T> {
+      const client = await pool.connect();
+      try {
+        await client.query(beginStatement(options));
+        const transactionQuerier = createQuerier(client);
+        const transaction = registry
+          ? Object.freeze(
+              attachRepositories(
+                { ...transactionQuerier },
+                createLazyRepositories(registry, transactionQuerier),
+              ),
+            )
+          : transactionQuerier;
+        const value = await callback(transaction);
+        await client.query("COMMIT");
+        return value;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+  };
+
+  const result = {
+    ...database,
+    ...(config?.migrations
+      ? { migrations: createMigrator(pool, config.migrations) }
+      : {}),
+  };
+
+  return Object.freeze(
+    registry
+      ? attachRepositories(result, createLazyRepositories(registry, querier))
+      : result,
+  );
+}
