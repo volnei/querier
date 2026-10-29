@@ -194,6 +194,35 @@ Files are sorted lexicographically by name and executed in full. There are no `u
 
 Each file runs in its own transaction. A PostgreSQL advisory lock prevents concurrent runs, and `public._querier_migrations` records the identifier and SHA-256 checksum of every applied file. If an applied file is edited, execution is rejected. `up({ to: "..." })` applies migrations through a specific identifier.
 
+## Backfills
+
+Backfills are controlled separately from schema migrations and are never run automatically. They use the same forward-only SQL file guarantees: lexical ordering, checksums, an advisory lock, and one transaction per file.
+
+```text
+backfills/
+├── 001_normalize_emails.sql
+└── 002_populate_account_slugs.sql
+```
+
+```ts
+const db = createDatabase(pool, {
+  migrations: {
+    directory: new URL("./migrations/", import.meta.url),
+  },
+  backfills: {
+    directory: new URL("./backfills/", import.meta.url),
+    schema: "public",
+    table: "_querier_backfills",
+  },
+});
+
+await db.backfills.status();
+await db.backfills.run();
+await db.backfills.run({ to: "002_populate_account_slugs" });
+```
+
+`run()` executes every pending backfill exactly once and records it in `public._querier_backfills` by default. A changed checksum, an unknown database record, or a non-linear history stops execution. To correct a completed backfill, add a new SQL file instead of editing the original.
+
 ## Example
 
 The [`example`](./example) directory contains a complete application with a SQL migration, a lazy repository, a transaction, and typed queries. Start PostgreSQL, then run:
@@ -203,7 +232,7 @@ export DATABASE_URL=postgres://postgres:postgres@localhost:5432/querier
 npm run example
 ```
 
-The example applies pending migrations, inserts a user inside a transaction, reads it through the repository, and verifies the result. The CI workflow runs this same example against the official minimal PostgreSQL Alpine image.
+The example applies pending migrations and backfills, inserts a user inside a transaction, reads it through the repository, and verifies the result. The CI workflow runs this same example against the official minimal PostgreSQL Alpine image.
 
 ## What “typed” means here
 

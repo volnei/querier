@@ -1,7 +1,16 @@
+export { createBackfillManager } from "./backfills.js";
+export type {
+  BackfillManager,
+  BackfillOptions,
+  BackfillStatus,
+  RunBackfillsOptions,
+} from "./backfills.js";
 export { createDatabase, createQuerier } from "./client.js";
 export type {
+  ConfiguredDatabase,
   Database,
   DatabaseConfig,
+  DatabaseWithBackfills,
   DatabaseWithMigrations,
   PgPoolLike,
   PgQueryable,

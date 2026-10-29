@@ -48,10 +48,16 @@ const db = createDatabase(pool, {
     schema: "public",
     table: "querier_migrations",
   },
+  backfills: {
+    directory: new URL("./backfills/", import.meta.url),
+    schema: "public",
+    table: "querier_backfills",
+  },
 });
 
 try {
   const applied = await db.migrations.up();
+  const backfilled = await db.backfills.run();
   const email = `ada-${Date.now()}@example.com`;
   const users = new UsersService(db.users);
 
@@ -59,7 +65,7 @@ try {
   const found = await db.users.findByEmail(email);
 
   deepStrictEqual(found, created);
-  console.log({ applied, user: found });
+  console.log({ applied, backfilled, user: found });
 } finally {
   await pool.end();
 }

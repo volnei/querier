@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { QueryResult, QueryResultRow } from "pg";
+import {
+  createBackfillManager,
+  type BackfillManager,
+  type BackfillOptions,
+} from "./backfills.js";
 import { NoRowsError, TooManyRowsError, TransactionClosedError } from "./errors.js";
 import { createMigrator, type Migrator, type MigratorOptions } from "./migrations.js";
 import type { SqlQuery, SqlStatement } from "./query.js";
@@ -98,10 +103,26 @@ export interface DatabaseWithMigrations {
   readonly migrations: Migrator;
 }
 
+export interface DatabaseWithBackfills {
+  readonly backfills: BackfillManager;
+}
+
 export interface DatabaseConfig<Registry extends RepositoryRegistry = RepositoryRegistry> {
   readonly repositories?: Registry;
   readonly migrations?: MigratorOptions;
+  readonly backfills?: BackfillOptions;
 }
+
+export type ConfiguredDatabase<Config extends DatabaseConfig> =
+  (Config extends { readonly repositories: infer Registry extends RepositoryRegistry }
+    ? RepositoryDatabase<RepositoryInstances<Registry>>
+    : Database) &
+  (Config extends { readonly migrations: MigratorOptions }
+    ? DatabaseWithMigrations
+    : object) &
+  (Config extends { readonly backfills: BackfillOptions }
+    ? DatabaseWithBackfills
+    : object);
 
 function beginStatement(options: TransactionOptions): string {
   const clauses = ["BEGIN"];
@@ -120,6 +141,7 @@ const reservedRepositoryNames = new Set([
   "execute",
   "transaction",
   "migrations",
+  "backfills",
 ]);
 
 function assertRepositoryNames(registry: RepositoryRegistry | undefined): void {
@@ -149,26 +171,14 @@ function hasTransactionOptions(options: TransactionOptions): boolean {
 }
 
 export function createDatabase(pool: PgPoolLike): Database;
-export function createDatabase<Registry extends RepositoryRegistry>(
+export function createDatabase<const Config extends DatabaseConfig>(
   pool: PgPoolLike,
-  config: { readonly repositories: Registry; readonly migrations: MigratorOptions },
-): RepositoryDatabase<RepositoryInstances<Registry>> & DatabaseWithMigrations;
-export function createDatabase<Registry extends RepositoryRegistry>(
-  pool: PgPoolLike,
-  config: { readonly repositories: Registry },
-): RepositoryDatabase<RepositoryInstances<Registry>>;
-export function createDatabase(
-  pool: PgPoolLike,
-  config: { readonly migrations: MigratorOptions },
-): Database & DatabaseWithMigrations;
+  config: Config,
+): ConfiguredDatabase<Config>;
 export function createDatabase<Registry extends RepositoryRegistry>(
   pool: PgPoolLike,
   config?: DatabaseConfig<Registry>,
-):
-  | Database
-  | RepositoryDatabase<RepositoryInstances<Registry>>
-  | (Database & DatabaseWithMigrations)
-  | (RepositoryDatabase<RepositoryInstances<Registry>> & DatabaseWithMigrations) {
+): object {
   const transactionStorage = new AsyncLocalStorage<TransactionContext>();
   const contextualClient: PgQueryable = {
     query<Row extends QueryResultRow = QueryResultRow>(
@@ -232,6 +242,9 @@ export function createDatabase<Registry extends RepositoryRegistry>(
     ...database,
     ...(config?.migrations
       ? { migrations: createMigrator(pool, config.migrations) }
+      : {}),
+    ...(config?.backfills
+      ? { backfills: createBackfillManager(pool, config.backfills) }
       : {}),
   };
 

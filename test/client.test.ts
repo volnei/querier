@@ -27,8 +27,10 @@ describe("createQuerier", () => {
       const db = createDatabase(new Pool(), {
         repositories: {},
         migrations: { directory: "./migrations" },
+        backfills: { directory: "./backfills" },
       });
       db.migrations.status();
+      db.backfills.status();
     }
   });
 
