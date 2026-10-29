@@ -263,4 +263,21 @@ describePostgres("PostgreSQL query integration", () => {
     expect(result.rows).toEqual([{ count: 42n }]);
     expect(result.command).toBe("SELECT");
   });
+
+  it("reuses an explicitly named prepared query with different parameters", async () => {
+    await db.execute(sql`
+      insert into ${table("people")} (name) values (${"Ada"}), (${"Grace"})
+    `);
+    const byId = sql.prepare<{ id: number; name: string }>("integration.people.by-id");
+
+    const first = await db.one(byId`
+      select id, name from ${table("people")} where id = ${1}
+    `);
+    const second = await db.one(byId`
+      select id, name from ${table("people")} where id = ${2}
+    `);
+
+    expect(first).toEqual({ id: 1, name: "Ada" });
+    expect(second).toEqual({ id: 2, name: "Grace" });
+  });
 });

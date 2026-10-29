@@ -34,6 +34,12 @@ export interface PgQueryable {
     text: string,
     values?: readonly unknown[],
   ): Promise<QueryResult<Row>>;
+  query<Row extends QueryResultRow = QueryResultRow>(config: {
+    readonly name?: string;
+    readonly text: string;
+    readonly values?: readonly unknown[];
+    readonly rowMode?: "array";
+  }): Promise<QueryResult<Row>>;
 }
 
 type RowOf<Query> = Query extends SqlQuery<infer Row> ? Row : never;
@@ -123,6 +129,7 @@ interface PgStreamClient {
 
 interface PgArrayQueryable {
   query<Row extends readonly unknown[]>(config: {
+    readonly name?: string;
     readonly text: string;
     readonly values: readonly unknown[];
     readonly rowMode: "array";
@@ -160,7 +167,7 @@ function defaultStreamClient(client: PgQueryable): AcquireStreamClient {
     }
 
     return {
-      client: client as PgStreamClient,
+      client: client as unknown as PgStreamClient,
       release() {},
     };
   };
@@ -175,7 +182,13 @@ function createQuerierInternal(
   acquireStreamClient: AcquireStreamClient,
 ): Querier {
   const executeRows = <Query extends SqlQuery>(query: Query) =>
-    client.query<PgRow<Query>>(query.text, query.values);
+    query.name
+      ? client.query<PgRow<Query>>({
+          name: query.name,
+          text: query.text,
+          values: query.values,
+        })
+      : client.query<PgRow<Query>>(query.text, query.values);
 
   function parseRow<Query extends SqlQuery>(
     query: Query,
@@ -192,6 +205,7 @@ function createQuerierInternal(
 
   async function runMany<Query extends SqlQuery>(query: Query): Promise<RowOf<Query>[]> {
     const result = await executeRows(query);
+    if (!query.parser) return result.rows as RowOf<Query>[];
     return result.rows.map((row, index) => parseRow(query, row, index));
   }
 
@@ -273,10 +287,12 @@ function createQuerierInternal(
     query: SqlQuery<Row>,
   ): Promise<Row[]> {
     const result = await arrayClient.query<Row>({
+      ...(query.name ? { name: query.name } : {}),
       text: query.text,
       values: query.values,
       rowMode: "array",
     });
+    if (!query.parser) return result.rows;
     return result.rows.map((row, index) => parseTuple(query.parser, row, index));
   }
 
@@ -397,7 +413,13 @@ function createQuerierInternal(
   async function runExecute<Query extends SqlStatement | SqlQuery>(
     query: Query,
   ): Promise<QueryResult<ExecutedRow<Query>>> {
-    const result = await client.query<ExecutedRow<Query>>(query.text, query.values);
+    const result = "name" in query && query.name
+      ? await client.query<ExecutedRow<Query>>({
+          name: query.name,
+          text: query.text,
+          values: query.values,
+        })
+      : await client.query<ExecutedRow<Query>>(query.text, query.values);
     if (!("parser" in query) || !query.parser) return result;
     return {
       ...result,
@@ -553,16 +575,24 @@ export function createDatabase<Registry extends RepositoryRegistry>(
   config?: DatabaseConfig<Registry>,
 ): object {
   const transactionStorage = new AsyncLocalStorage<TransactionContext>();
-  const contextualClient: PgQueryable = {
+  const contextualClient = {
     query<Row extends QueryResultRow = QueryResultRow>(
-      text: string,
+      input: string | {
+        readonly name?: string;
+        readonly text: string;
+        readonly values?: readonly unknown[];
+        readonly rowMode?: "array";
+      },
       values?: readonly unknown[],
     ): Promise<QueryResult<Row>> {
       const context = transactionStorage.getStore();
       if (context && !context.active) throw new TransactionClosedError();
-      return (context?.client ?? pool).query<Row>(text, values);
+      const target = context?.client ?? pool;
+      return typeof input === "string"
+        ? target.query<Row>(input, values)
+        : target.query<Row>(input);
     },
-  };
+  } as PgQueryable;
   const querier = createQuerierInternal(contextualClient, async () => {
     const context = transactionStorage.getStore();
     if (context && !context.active) throw new TransactionClosedError();

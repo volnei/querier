@@ -26,6 +26,7 @@
   "scripts": {
     "clean": "bun -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
     "build": "bun run clean && bunx tsc -p tsconfig.build.json",
+    "bench": "bun benchmark/index.ts",
     "check": "bunx tsc --noEmit",
     "lint": "bun lint --max-warnings 0",
     "lint:fix": "bun lint --fix",

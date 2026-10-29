@@ -53,5 +53,10 @@ jobs:
       - name: Run PostgreSQL integration tests
         run: bun run test:integration
 
+      - name: Smoke test benchmarks
+        run: bun run bench
+        env:
+          BENCH_ITERATIONS: 10
+
       - name: Run example against PostgreSQL
         run: bun run example

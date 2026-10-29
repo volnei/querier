@@ -127,6 +127,43 @@ describe("createQuerier", () => {
     expect(query).toHaveBeenCalledWith("delete from users where id = $1", [7]);
   });
 
+  it("passes prepared query names to pg and avoids copying unparsed rows", async () => {
+    const rows = [{ id: 1, name: "Ada" }];
+    const query = vi.fn().mockResolvedValue(result(rows));
+    const db = createQuerier({ query });
+    const byId = sql.prepare<{ id: number; name: string }>("users.by-id");
+
+    const users = await db.many(byId`select id, name from users where id = ${1}`);
+
+    expect(users).toBe(rows);
+    expect(query).toHaveBeenCalledWith({
+      name: "users.by-id",
+      text: "select id, name from users where id = $1",
+      values: [1],
+    });
+  });
+
+  it("uses prepared queries inside the contextual transaction client", async () => {
+    const clientQuery = vi.fn(async (input: unknown) => {
+      if (typeof input === "object") return result([{ value: 42 }]);
+      return result([]);
+    });
+    const db = createDatabase({
+      query: vi.fn().mockResolvedValue(result([])),
+      connect: vi.fn().mockResolvedValue({ query: clientQuery, release: vi.fn() }),
+    });
+    const prepared = sql.prepare<{ value: number }>("answer");
+
+    const answer = await db.transaction(() => db.one(prepared`select ${42}::int as value`));
+
+    expect(answer).toEqual({ value: 42 });
+    expect(clientQuery).toHaveBeenCalledWith({
+      name: "answer",
+      text: "select $1::int as value",
+      values: [42],
+    });
+  });
+
   it("infers streamed rows from a type or parser", () => {
     const typecheck = () => {
       const db = createQuerier(new Pool());

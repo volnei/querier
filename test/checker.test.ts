@@ -84,6 +84,17 @@ describe("query checker", () => {
     expect(result).toEqual({ checked: 1, skipped: 0, diagnostics: [] });
   });
 
+  it("extracts queries created with sql.prepare", async () => {
+    const fixture = await source(`
+      const byId = sql.prepare<{ id: number; email: string }>("users.by-id");
+      byId\`select id, email from users where id = \${1}\`;
+    `);
+
+    const result = await checkQueries({ paths: [fixture.file], schema });
+
+    expect(result).toEqual({ checked: 1, skipped: 0, diagnostics: [] });
+  });
+
   it("requires an explicit checking backend", async () => {
     const fixture = await source(`db.execute\`select 1\`;`);
 

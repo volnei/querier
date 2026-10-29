@@ -18,6 +18,11 @@ const pool = createIntegrationPool(6);
 let schema = "";
 let repositoryConstructions = 0;
 const accountsTable = () => sql.identifier(schema, "accounts");
+const preparedAccountById = sql.prepare<{
+  id: number;
+  owner: string;
+  balance: number;
+}>("integration.accounts.by-id");
 
 class AccountsRepository extends Repository {
   readonly instance = ++repositoryConstructions;
@@ -43,6 +48,12 @@ class AccountsRepository extends Repository {
     return this.maybeOne<{ id: number; owner: string; balance: number }>()`
       select id, owner, balance from ${accountsTable()} where id = ${id}
     `;
+  }
+
+  findPrepared(id: number) {
+    return this.one(preparedAccountById`
+      select id, owner, balance from ${accountsTable()} where id = ${id}
+    `);
   }
 
   streamAll(batchSize = 10) {
@@ -101,6 +112,17 @@ describePostgres("PostgreSQL repository and transaction integration", () => {
 
     await expect(db.accounts.find(source.id)).resolves.toMatchObject({ balance: 60 });
     await expect(db.accounts.find(destination.id)).resolves.toMatchObject({ balance: 65 });
+  });
+
+  it("reuses prepared repository queries on the active transaction client", async () => {
+    const account = await db.accounts.create("prepared", 50);
+
+    const rows = await db.transaction(async () => [
+      await db.accounts.findPrepared(account.id),
+      await db.accounts.findPrepared(account.id),
+    ]);
+
+    expect(rows).toEqual([account, account]);
   });
 
   it("rolls back every repository write when later work fails", async () => {

@@ -71,6 +71,40 @@ const users = await db.many<User>()`
 - `db.transaction(callback, options?)` uses a `PoolClient` with automatic commit/rollback and async context propagation.
 - `sql.fragment`, `sql.identifier`, `sql.join`, and `sql.values` enable safe composition.
 
+## Prepared queries and performance
+
+Frequently executed, structurally stable queries can opt into PostgreSQL prepared statements with a stable name:
+
+```ts
+const accountById = sql.prepare<Account>("accounts.by-id");
+
+class AccountsRepository extends Repository {
+  find(id: number) {
+    return this.one(accountById`
+      select id, balance
+      from accounts
+      where id = ${id}
+    `);
+  }
+}
+```
+
+Querier passes the name through the native `pg` query config. Each pool connection parses the statement the first time it sees that name and reuses it afterward. A name must always identify the same SQL text; use prepared queries for measured hot paths rather than generating names dynamically. Cursor-backed `stream` queries manage their own PostgreSQL portal and do not use the prepared name.
+
+Unparsed `many` and tuple results use a zero-copy fast path: the array returned by `pg` is returned directly. Zod and other parsers still receive every row and therefore allocate their transformed result array.
+
+The repository includes a PostgreSQL benchmark that compares raw `pg`, regular Querier rows, prepared rows, and tuple rows over the same single-connection pool:
+
+```sh
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/querier \
+  bun run bench
+
+# Useful for a quick smoke run:
+BENCH_ITERATIONS=20 bun run bench
+```
+
+The benchmark intentionally has no pass/fail performance threshold because shared CI timing is noisy. CI executes a short smoke run to ensure every benchmark path remains functional.
+
 ## Optional runtime row validation
 
 `sql.type<Row>()` provides compile-time types with no runtime cost. Passing any parser with a `parse(value)` method also validates and transforms every returned row. Zod works without an adapter and remains an optional application dependency:
@@ -398,6 +432,7 @@ bun run check          # validates types
 bun run lint           # runs Bun's native linter with zero warnings allowed
 bun test               # runs the test suite
 bun run test:integration # runs PostgreSQL integration tests (requires DATABASE_URL)
+bun run bench          # compares pg, regular, prepared, and tuple query paths
 bun run build          # generates dist/
 bun pm pack --dry-run  # shows exactly what will be included in the package
 ```

@@ -42,6 +42,8 @@ export interface SqlStatement extends SqlSource {
 export interface SqlQuery<Row extends object = object> extends SqlSource {
   readonly [queryBrand]: { readonly typed: true; readonly row: Row };
   readonly parser?: RowParser<Row>;
+  /** Stable per-connection prepared statement name understood by `pg`. */
+  readonly name?: string;
 }
 
 export type AnySqlQuery = SqlStatement | SqlQuery;
@@ -159,6 +161,12 @@ export interface SqlTag {
     parser: Parser,
   ): TypedSqlTag<ParserOutput<Parser>>;
 
+  prepare<Row extends object>(name: string): TypedSqlTag<Row>;
+  prepare<Parser extends RowParser<object>>(
+    name: string,
+    parser: Parser,
+  ): TypedSqlTag<ParserOutput<Parser>>;
+
   fragment(
     strings: TemplateStringsArray,
     ...interpolations: readonly SqlInterpolation[]
@@ -182,7 +190,10 @@ const tag = (
   }) as unknown as SqlStatement;
 };
 
-function createTypedTag<Row extends object>(parser?: RowParser<Row>): TypedSqlTag<Row> {
+function createTypedTag<Row extends object>(
+  parser?: RowParser<Row>,
+  name?: string,
+): TypedSqlTag<Row> {
   return (
     strings: TemplateStringsArray,
     ...interpolations: readonly SqlInterpolation[]
@@ -191,6 +202,7 @@ function createTypedTag<Row extends object>(parser?: RowParser<Row>): TypedSqlTa
     return Object.freeze({
       ...compiled,
       ...(parser ? { parser } : {}),
+      ...(name ? { name } : {}),
       [queryBrand]: undefined,
     }) as unknown as SqlQuery<Row>;
   };
@@ -204,8 +216,19 @@ function typedSql(parser?: RowParser<object>): TypedSqlTag<object> {
   return createTypedTag(parser);
 }
 
+function preparedSql<Row extends object>(name: string): TypedSqlTag<Row>;
+function preparedSql<Parser extends RowParser<object>>(
+  name: string,
+  parser: Parser,
+): TypedSqlTag<ParserOutput<Parser>>;
+function preparedSql(name: string, parser?: RowParser<object>): TypedSqlTag<object> {
+  if (name.trim() === "") throw new TypeError("sql.prepare requires a non-empty name");
+  return createTypedTag(parser, name);
+}
+
 export const sql = Object.assign(tag, {
   type: typedSql,
+  prepare: preparedSql,
 
   fragment(
     strings: TemplateStringsArray,

@@ -55,6 +55,20 @@ describe("sql", () => {
     expect(query.values).toEqual(["Ada", true, "Grace", false, 1, 2, 3]);
   });
 
+  it("creates explicitly named prepared queries", () => {
+    const byId = sql.prepare<{ id: number; name: string }>("users.by-id");
+    const query = byId`select id, name from users where id = ${42}`;
+
+    expect(query).toMatchObject({
+      name: "users.by-id",
+      text: "select id, name from users where id = $1",
+      values: [42],
+    });
+    expect(() => sql.prepare<{ id: number }>("  ")).toThrow(
+      "sql.prepare requires a non-empty name",
+    );
+  });
+
   it("encodes JSON values distinctly from SQL null and PostgreSQL arrays", () => {
     const payload = {
       type: "account.created",

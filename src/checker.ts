@@ -171,14 +171,23 @@ function compileTemplate(template: ts.TemplateLiteral, state: CompileState): str
   return text;
 }
 
-function explicitTypeNode(node: ts.TaggedTemplateExpression): ts.TypeNode | undefined {
+function explicitTypeNode(
+  node: ts.TaggedTemplateExpression,
+  preparedTags: ReadonlyMap<string, ts.CallExpression>,
+): ts.TypeNode | undefined {
   if (node.typeArguments?.[0]) return node.typeArguments[0];
-  if (!ts.isCallExpression(node.tag)) return undefined;
-  return node.tag.typeArguments?.[0];
+  if (ts.isCallExpression(node.tag)) return node.tag.typeArguments?.[0];
+  if (ts.isIdentifier(node.tag)) return preparedTags.get(node.tag.text)?.typeArguments?.[0];
+  return undefined;
 }
 
-function isQueryTag(node: ts.TaggedTemplateExpression): boolean {
-  if (ts.isIdentifier(node.tag)) return node.tag.text === "sql";
+function isQueryTag(
+  node: ts.TaggedTemplateExpression,
+  preparedTags: ReadonlyMap<string, ts.CallExpression>,
+): boolean {
+  if (ts.isIdentifier(node.tag)) {
+    return node.tag.text === "sql" || preparedTags.has(node.tag.text);
+  }
   if (isSqlProperty(node.tag, "fragment")) return false;
   if (ts.isPropertyAccessExpression(node.tag)) {
     return node.tag.name.text === "execute";
@@ -186,7 +195,10 @@ function isQueryTag(node: ts.TaggedTemplateExpression): boolean {
   if (!ts.isCallExpression(node.tag)) return false;
   const name = propertyName(node.tag.expression);
   if (name && queryMethods.has(name)) return true;
-  return isSqlProperty(node.tag.expression, "type");
+  return (
+    isSqlProperty(node.tag.expression, "type") ||
+    isSqlProperty(node.tag.expression, "prepare")
+  );
 }
 
 function expectedShape(
@@ -234,6 +246,26 @@ function structuralBindings(source: ts.SourceFile): ReadonlyMap<string, ts.Expre
   return bindings;
 }
 
+function preparedTagBindings(
+  source: ts.SourceFile,
+): ReadonlyMap<string, ts.CallExpression> {
+  const bindings = new Map<string, ts.CallExpression>();
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      ts.isCallExpression(node.initializer) &&
+      isSqlProperty(node.initializer.expression, "prepare")
+    ) {
+      bindings.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return bindings;
+}
+
 function extractQueries(files: readonly string[]): readonly ExtractedQuery[] {
   const program = ts.createProgram({
     rootNames: [...files],
@@ -252,12 +284,13 @@ function extractQueries(files: readonly string[]): readonly ExtractedQuery[] {
     const source = program.getSourceFile(file);
     if (!source) continue;
     const bindings = structuralBindings(source);
+    const preparedTags = preparedTagBindings(source);
 
     const visit = (node: ts.Node): void => {
-      if (ts.isTaggedTemplateExpression(node) && isQueryTag(node)) {
+      if (ts.isTaggedTemplateExpression(node) && isQueryTag(node, preparedTags)) {
         const state: CompileState = { parameterCount: 0, bindings };
         const location = source.getLineAndCharacterOfPosition(node.getStart(source));
-        const expected = expectedShape(explicitTypeNode(node), checker);
+        const expected = expectedShape(explicitTypeNode(node, preparedTags), checker);
         queries.push({
           file,
           line: location.line + 1,
